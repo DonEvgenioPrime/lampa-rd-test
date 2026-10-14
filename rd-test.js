@@ -1,7 +1,8 @@
 (function () {
     'use strict';
     var PLUGIN_NAME = 'Real-Debrid Bridge';
-    var PLUGIN_VERSION = '1.1.0';
+    var PLUGIN_VERSION = '1.1.1';
+    var COMPONENT = 'rd_bridge';
     var PROXY = 'https://lampa-rd-proxy.evgeniy4450.workers.dev/';
     var RD_API = 'https://api.real-debrid.com/rest/1.0/';
     var OAUTH = 'https://api.real-debrid.com/oauth/v2/';
@@ -13,13 +14,14 @@
     ];
     var MAX_HASH_CHECKS = 10;
     var HASH_CHECK_DELAY = 1500;
-    var STOP_ON_RD_ERROR = true;
+    var SETTINGS_REGISTERED = false;
     function notify(message) {
-        if (window.Lampa && Lampa.Noty &&
+        if (window.Lampa &&
+            Lampa.Noty &&
             typeof Lampa.Noty.show === 'function') {
             Lampa.Noty.show(message);
         } else {
-            alert(message);
+            window.alert(message);
         }
     }
     function request(url, options) {
@@ -89,11 +91,13 @@
         });
     }
     function refreshAccessToken(auth) {
-        if (!auth || !auth.refresh_token ||
-            !auth.client_id || !auth.client_secret) {
+        if (!auth ||
+            !auth.refresh_token ||
+            !auth.client_id ||
+            !auth.client_secret) {
             return Promise.reject(new Error(
                 'Нет данных для обновления токена. ' +
-                'Нужно подключить RD заново.'
+                'Подключи RD заново.'
             ));
         }
         return postForm(OAUTH + 'token', {
@@ -122,7 +126,7 @@
         var auth = readAuth();
         if (!auth || !auth.access_token) {
             return Promise.reject(new Error(
-                'Real-Debrid не подключён. Нажми «Подключить RD».'
+                'Real-Debrid не подключён. Используй «Подключить RD».'
             ));
         }
         return profile(auth.access_token).then(function (user) {
@@ -146,18 +150,15 @@
             new_credentials: 'yes'
         }).then(function (device) {
             if (!device.device_code) {
-                throw new Error(
-                    'RD не вернул device_code.'
-                );
+                throw new Error('RD не вернул device_code.');
             }
             var url = device.verification_url ||
                 'https://real-debrid.com/device';
-            notify(
+            var message =
                 'Открой страницу авторизации RD:\n' + url +
                 '\n\nКод: ' + (device.user_code || '') +
-                '\n\nПосле подтверждения вернись в Lampa.'
-            );
-            window.open(url, '_blank');
+                '\n\nПосле подтверждения вернись в Lampa.';
+            notify(message);
             var interval = Math.max(
                 5, Number(device.interval) || 5
             ) * 1000;
@@ -176,9 +177,7 @@
                     if (/HTTP 400|authorization_pending|slow_down/i.test(
                         error.message
                     )) {
-                        return new Promise(function (resolve) {
-                            setTimeout(resolve, interval);
-                        }).then(pollCredentials);
+                        return delay(interval).then(pollCredentials);
                     }
                     throw error;
                 });
@@ -249,8 +248,11 @@
         return '';
     }
     function extractTitle(item) {
-        return item.title || item.name || item.release ||
-            item.original_title || 'Без названия';
+        return item.title ||
+            item.name ||
+            item.release ||
+            item.original_title ||
+            'Без названия';
     }
     function parserSearch(parser, query) {
         var url = parser.replace(/\/$/, '') +
@@ -335,7 +337,6 @@
                     onProgress(index + 1, unique.length, result);
                 }
                 if (result.error &&
-                    STOP_ON_RD_ERROR &&
                     /HTTP 401|bad_token|HTTP 429|too_many_requests/i.test(
                         result.error
                     )) {
@@ -440,9 +441,13 @@
                     setStatus('Найдено: ' + items.length +
                         '. Проверяю до ' + MAX_HASH_CHECKS +
                         ' уникальных hash в RD…');
-                    return checkHashes(hashes, authResult.auth, function (done, total) {
-                        setStatus('Проверка RD: ' + done + ' из ' + total);
-                    }).then(function (checked) {
+                    return checkHashes(
+                        hashes,
+                        authResult.auth,
+                        function (done, total) {
+                            setStatus('Проверка RD: ' + done + ' из ' + total);
+                        }
+                    ).then(function (checked) {
                         var byHash = {};
                         checked.results.forEach(function (item) {
                             byHash[item.hash] = item;
@@ -523,9 +528,108 @@
         root.appendChild(createPanel());
         document.body.appendChild(root);
     }
+    /*
+     * Регистрация компонента и действий в настройках Lampa.
+     */
+    function addSettings() {
+        if (!window.Lampa ||
+            !Lampa.SettingsApi ||
+            SETTINGS_REGISTERED) {
+            return;
+        }
+        SETTINGS_REGISTERED = true;
+        try {
+            Lampa.SettingsApi.addComponent({
+                component: COMPONENT,
+                name: 'Real-Debrid',
+                icon: '<svg width="24" height="24" viewBox="0 0 24 24">' +
+                    '<circle cx="12" cy="12" r="9" fill="none" ' +
+                    'stroke="currentColor" stroke-width="2"/>' +
+                    '</svg>'
+            });
+            function addButton(name, title, description, callback) {
+                Lampa.SettingsApi.addParam({
+                    component: COMPONENT,
+                    param: {
+                        name: name,
+                        type: 'button',
+                        values: ''
+                    },
+                    field: {
+                        name: title,
+                        description: description
+                    },
+                    onChange: callback
+                });
+            }
+            addButton(
+                'rd_oauth_start_v2',
+                'Подключить Real-Debrid',
+                'Авторизация через официальный сайт Real-Debrid',
+                function () {
+                    connectAuth().catch(function (error) {
+                        notify('Ошибка подключения RD: ' + error.message);
+                    });
+                }
+            );
+            addButton(
+                'rd_oauth_check_v2',
+                'Проверить подключение',
+                'Проверить профиль и обновить токен при необходимости',
+                function () {
+                    getWorkingAuth().then(function (result) {
+                        var user = result.user || {};
+                        notify(
+                            'RD работает: ' +
+                            (user.username || user.email || user.id || 'OK')
+                        );
+                    }).catch(function (error) {
+                        notify('Проверка RD не пройдена: ' + error.message);
+                    });
+                }
+            );
+            addButton(
+                'rd_oauth_disconnect_v2',
+                'Удалить локальные данные',
+                'Удалить сохранённую авторизацию RD в этом браузере',
+                function () {
+                    clearAuth();
+                    notify('Локальные данные RD удалены.');
+                }
+            );
+            addButton(
+                'rd_search_cached_v1',
+                'Поиск закэшированных раздач',
+                'Поиск на MaxVol и JacRed с проверкой кэша RD',
+                function () {
+                    openPanel();
+                }
+            );
+            console.log(
+                '[' + PLUGIN_NAME + '] Настройки зарегистрированы',
+                PLUGIN_VERSION
+            );
+        } catch (error) {
+            SETTINGS_REGISTERED = false;
+            console.error(
+                '[' + PLUGIN_NAME + '] Ошибка регистрации настроек:',
+                error
+            );
+        }
+    }
     function init() {
-        if (typeof Lampa === 'undefined') return;
+        if (!window.Lampa) return;
         window.rdBridgeOpen = openPanel;
+        if (Lampa.SettingsApi) {
+            addSettings();
+        } else if (Lampa.Listener &&
+            typeof Lampa.Listener.follow === 'function') {
+            Lampa.Listener.follow('app', function (event) {
+                if (event.type === 'ready') {
+                    addSettings();
+                }
+            });
+        }
         console.log('[' + PLUGIN_NAME + '] Загружен', PLUGIN_VERSION);
     }
     if (document.readyState === 'loading') {
