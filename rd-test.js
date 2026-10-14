@@ -1,7 +1,9 @@
+
 (function () {
     'use strict';
+
     var PLUGIN_NAME = 'Real-Debrid Bridge';
-    var PLUGIN_VERSION = '1.1.2';
+    var PLUGIN_VERSION = '1.1.3';
     var COMPONENT = 'rd_bridge';
     var PROXY = 'https://lampa-rd-proxy.evgeniy4450.workers.dev/';
     var RD_API = 'https://api.real-debrid.com/rest/1.0/';
@@ -18,15 +20,16 @@
     var RD_INIT_TIMER = null;
     var RD_INIT_ATTEMPTS = 0;
     var RD_INIT_MAX_ATTEMPTS = 120;
+
     function notify(message) {
-        if (window.Lampa &&
-            Lampa.Noty &&
+        if (window.Lampa && Lampa.Noty &&
             typeof Lampa.Noty.show === 'function') {
             Lampa.Noty.show(message);
         } else {
             window.alert(message);
         }
     }
+
     function request(url, options) {
         return fetch(url, options || {}).then(function (response) {
             return response.text().then(function (text) {
@@ -36,30 +39,29 @@
                 } catch (e) {
                     data = { message: text };
                 }
+
                 if (!response.ok) {
-                    var message =
-                        data.error_description ||
-                        data.error ||
-                        data.message ||
-                        response.statusText ||
-                        'Неизвестная ошибка';
                     throw new Error(
-                        'HTTP ' + response.status + ': ' + message
+                        'HTTP ' + response.status + ': ' +
+                        (data.error_description || data.error ||
+                            data.message || response.statusText ||
+                            'Неизвестная ошибка')
                     );
                 }
                 return data;
             });
         });
     }
+
     function postForm(url, values) {
         var body = new URLSearchParams();
         Object.keys(values).forEach(function (key) {
             if (values[key] !== undefined &&
-                values[key] !== null &&
-                values[key] !== '') {
+                values[key] !== null && values[key] !== '') {
                 body.set(key, String(values[key]));
             }
         });
+
         return request(url, {
             method: 'POST',
             headers: {
@@ -68,24 +70,27 @@
             body: body.toString()
         });
     }
+
     function proxyUrl(url) {
         return PROXY + '?url=' + encodeURIComponent(url);
     }
+
     function readAuth() {
         try {
-            return JSON.parse(
-                localStorage.getItem(STORE) || 'null'
-            );
+            return JSON.parse(localStorage.getItem(STORE) || 'null');
         } catch (e) {
             return null;
         }
     }
+
     function saveAuth(auth) {
         localStorage.setItem(STORE, JSON.stringify(auth));
     }
+
     function clearAuth() {
         localStorage.removeItem(STORE);
     }
+
     function profile(token) {
         return request(proxyUrl(RD_API + 'user'), {
             headers: {
@@ -93,53 +98,53 @@
             }
         });
     }
+
     function refreshAccessToken(auth) {
-        if (!auth ||
-            !auth.refresh_token ||
-            !auth.client_id ||
-            !auth.client_secret) {
+        if (!auth || !auth.refresh_token ||
+            !auth.client_id || !auth.client_secret) {
             return Promise.reject(new Error(
-                'Нет данных для обновления токена. ' +
-                'Подключи RD заново.'
+                'Нет данных для обновления токена. Подключи RD заново.'
             ));
         }
-        return postForm(OAUTH + 'token', {
+
+        return postForm(proxyUrl(OAUTH + 'token'), {
             client_id: auth.client_id,
             client_secret: auth.client_secret,
             code: auth.refresh_token,
             grant_type: 'http://oauth.net/grant_type/device/1.0'
         }).then(function (tokens) {
             if (!tokens.access_token) {
-                throw new Error(
-                    'RD не вернул новый access_token.'
-                );
+                throw new Error('RD не вернул новый access_token.');
             }
+
             var updated = Object.assign({}, auth, {
                 access_token: tokens.access_token,
-                refresh_token:
-                    tokens.refresh_token || auth.refresh_token,
+                refresh_token: tokens.refresh_token || auth.refresh_token,
                 expires_in: Number(tokens.expires_in) || 0,
                 obtained_at: Date.now()
             });
+
             saveAuth(updated);
             return updated;
         });
     }
+
     function getWorkingAuth() {
         var auth = readAuth();
+
         if (!auth || !auth.access_token) {
             return Promise.reject(new Error(
                 'Real-Debrid не подключён. Используй «Подключить RD».'
             ));
         }
+
         return profile(auth.access_token).then(function (user) {
             return { auth: auth, user: user };
         }).catch(function (error) {
-            if (!/HTTP 401|bad_token|unauthorized/i.test(
-                error.message
-            )) {
+            if (!/HTTP 401|bad_token|unauthorized/i.test(error.message)) {
                 throw error;
             }
+
             return refreshAccessToken(auth).then(function (updated) {
                 return profile(updated.access_token).then(function (user) {
                     return { auth: updated, user: user };
@@ -147,36 +152,49 @@
             });
         });
     }
+
+    /*
+     * Авторизация по коду устройства.
+     * OAuth-запросы направляются через существующий Worker.
+     */
     function connectAuth() {
-        return postForm(OAUTH + 'device/code', {
+        return postForm(proxyUrl(OAUTH + 'device/code'), {
             client_id: PUBLIC_CLIENT_ID,
             new_credentials: 'yes'
         }).then(function (device) {
             if (!device.device_code) {
                 throw new Error('RD не вернул device_code.');
             }
+
             var url = device.verification_url ||
                 'https://real-debrid.com/device';
-            var message =
+
+            notify(
                 'Открой страницу авторизации RD:\n' + url +
                 '\n\nКод: ' + (device.user_code || '') +
-                '\n\nПосле подтверждения вернись в Lampa.';
-            notify(message);
+                '\n\nПосле подтверждения вернись в Lampa.'
+            );
+
             var interval = Math.max(
                 5, Number(device.interval) || 5
             ) * 1000;
             var timeout = (Number(device.expires_in) || 600) * 1000;
             var started = Date.now();
+
             function pollCredentials() {
                 if (Date.now() - started > timeout) {
                     return Promise.reject(new Error(
                         'Время авторизации истекло. Попробуй снова.'
                     ));
                 }
-                return postForm(OAUTH + 'device/credentials', {
-                    client_id: PUBLIC_CLIENT_ID,
-                    code: device.device_code
-                }).catch(function (error) {
+
+                return postForm(
+                    proxyUrl(OAUTH + 'device/credentials'),
+                    {
+                        client_id: PUBLIC_CLIENT_ID,
+                        code: device.device_code
+                    }
+                ).catch(function (error) {
                     if (/HTTP 400|authorization_pending|slow_down/i.test(
                         error.message
                     )) {
@@ -185,6 +203,7 @@
                     throw error;
                 });
             }
+
             return pollCredentials().then(function (credentials) {
                 if (!credentials.client_id ||
                     !credentials.client_secret) {
@@ -192,18 +211,17 @@
                         'RD не вернул client_id/client_secret.'
                     );
                 }
-                return postForm(OAUTH + 'token', {
+
+                return postForm(proxyUrl(OAUTH + 'token'), {
                     client_id: credentials.client_id,
                     client_secret: credentials.client_secret,
                     code: device.device_code,
-                    grant_type:
-                        'http://oauth.net/grant_type/device/1.0'
+                    grant_type: 'http://oauth.net/grant_type/device/1.0'
                 }).then(function (tokens) {
                     if (!tokens.access_token) {
-                        throw new Error(
-                            'RD не вернул access_token.'
-                        );
+                        throw new Error('RD не вернул access_token.');
                     }
+
                     var auth = {
                         access_token: tokens.access_token,
                         refresh_token: tokens.refresh_token || '',
@@ -212,7 +230,9 @@
                         client_id: credentials.client_id,
                         client_secret: credentials.client_secret
                     };
+
                     saveAuth(auth);
+
                     return profile(auth.access_token).then(function (user) {
                         notify(
                             'RD подключён: ' +
@@ -224,16 +244,20 @@
             });
         });
     }
+
     function delay(ms) {
         return new Promise(function (resolve) {
             setTimeout(resolve, ms);
         });
     }
+
     function normalizeHash(value) {
         return String(value || '').trim().toLowerCase();
     }
+
     function extractHash(item) {
         if (!item) return '';
+
         var values = [
             item.hash,
             item.info_hash,
@@ -241,26 +265,27 @@
             item.torrent_hash,
             item.magnet
         ];
+
         for (var i = 0; i < values.length; i++) {
             var value = String(values[i] || '');
             var magnet = value.match(/btih:([a-f0-9]{40})/i);
             if (magnet) return magnet[1].toLowerCase();
+
             var hash = value.match(/\b[a-f0-9]{40}\b/i);
             if (hash) return hash[0].toLowerCase();
         }
         return '';
     }
+
     function extractTitle(item) {
-        return item.title ||
-            item.name ||
-            item.release ||
-            item.original_title ||
-            'Без названия';
+        return item.title || item.name || item.release ||
+            item.original_title || 'Без названия';
     }
+
     function parserSearch(parser, query) {
         var url = parser.replace(/\/$/, '') +
-            '/api/v1/search?query=' +
-            encodeURIComponent(query);
+            '/api/v1/search?query=' + encodeURIComponent(query);
+
         return request(proxyUrl(url)).then(function (data) {
             if (Array.isArray(data)) return data;
             if (data && Array.isArray(data.results)) return data.results;
@@ -269,9 +294,11 @@
             return [];
         });
     }
+
     function searchParsers(query) {
         var results = [];
         var errors = [];
+
         return PARSERS.reduce(function (chain, parser) {
             return chain.then(function () {
                 return parserSearch(parser, query).then(function (items) {
@@ -287,15 +314,18 @@
             return { items: results, errors: errors };
         });
     }
+
     function checkHash(hash, auth) {
         var url = RD_API + 'torrents/instantAvailability/' +
             encodeURIComponent(hash);
+
         return request(proxyUrl(url), {
             headers: {
                 Authorization: 'Bearer ' + auth.access_token
             }
         }).then(function (data) {
             var item = data && data[hash];
+
             return {
                 hash: hash,
                 available: !!(
@@ -311,9 +341,11 @@
             };
         });
     }
+
     function checkHashes(hashes, auth, onProgress) {
         var unique = [];
         var seen = {};
+
         hashes.forEach(function (hash) {
             hash = normalizeHash(hash);
             if (hash && !seen[hash]) {
@@ -321,10 +353,13 @@
                 unique.push(hash);
             }
         });
+
         unique = unique.slice(0, MAX_HASH_CHECKS);
+
         var results = [];
         var stopped = false;
         var stopReason = '';
+
         function next(index) {
             if (index >= unique.length || stopped) {
                 return Promise.resolve({
@@ -334,11 +369,14 @@
                     stopReason: stopReason
                 });
             }
+
             return checkHash(unique[index], auth).then(function (result) {
                 results.push(result);
+
                 if (onProgress) {
                     onProgress(index + 1, unique.length, result);
                 }
+
                 if (result.error &&
                     /HTTP 401|bad_token|HTTP 429|too_many_requests/i.test(
                         result.error
@@ -346,11 +384,13 @@
                     stopped = true;
                     stopReason = result.error;
                 }
+
                 if (index + 1 < unique.length && !stopped) {
                     return delay(HASH_CHECK_DELAY).then(function () {
                         return next(index + 1);
                     });
                 }
+
                 return {
                     results: results,
                     total: unique.length,
@@ -359,10 +399,13 @@
                 };
             });
         }
+
         return next(0);
     }
+
     function addStyles() {
         if (document.getElementById('rd-bridge-style')) return;
+
         var style = document.createElement('style');
         style.id = 'rd-bridge-style';
         style.textContent =
@@ -373,10 +416,13 @@
             '.rd-bridge-button{display:inline-block;padding:10px 14px;margin:4px;border-radius:6px;background:#7a5cff;color:#fff;cursor:pointer;border:0}' +
             '.rd-bridge-status{margin:8px 0;white-space:pre-wrap;overflow-wrap:anywhere}' +
             '.rd-bridge-input{box-sizing:border-box;width:100%;padding:12px;margin:8px 0;color:inherit;background:rgba(127,127,127,.12);border:1px solid rgba(127,127,127,.35);border-radius:6px}';
+
         document.head.appendChild(style);
     }
+
     function createPanel() {
         addStyles();
+
         var panel = document.createElement('div');
         panel.className = 'rd-bridge-panel';
         panel.innerHTML =
@@ -390,13 +436,17 @@
             '<input class="rd-bridge-input" id="rd-query" placeholder="Название фильма или сериала">' +
             '<button class="rd-bridge-button" id="rd-search">Найти раздачи</button>' +
             '<div id="rd-results"></div>';
+
         var status = panel.querySelector('#rd-status');
         var results = panel.querySelector('#rd-results');
+
         function setStatus(text) {
             status.textContent = text;
         }
+
         panel.querySelector('#rd-connect').onclick = function () {
             setStatus('Ожидаю авторизацию RD…');
+
             connectAuth().then(function (result) {
                 setStatus('Подключено: ' +
                     (result.user.username || result.user.email || 'OK'));
@@ -404,8 +454,10 @@
                 setStatus('Ошибка подключения: ' + error.message);
             });
         };
+
         panel.querySelector('#rd-check').onclick = function () {
             setStatus('Проверяю RD…');
+
             getWorkingAuth().then(function (result) {
                 setStatus('RD работает: ' +
                     (result.user.username || result.user.email || 'OK'));
@@ -413,37 +465,52 @@
                 setStatus('Проверка не пройдена: ' + error.message);
             });
         };
+
         panel.querySelector('#rd-disconnect').onclick = function () {
             clearAuth();
             setStatus('Локальная авторизация удалена. Подключи RD заново.');
         };
+
         panel.querySelector('#rd-search').onclick = function () {
             var query = panel.querySelector('#rd-query').value.trim();
+
             if (!query) {
                 notify('Введи название фильма или сериала.');
                 return;
             }
+
             results.innerHTML = '';
             setStatus('Проверяю авторизацию…');
+
             getWorkingAuth().then(function (authResult) {
                 setStatus('Ищу релизы…');
+
                 return searchParsers(query).then(function (search) {
                     var items = search.items;
+
                     if (!items.length) {
-                        setStatus('Релизы не найдены.\n' +
-                            (search.errors.join('\n') || 'Нет результатов.'));
+                        setStatus(
+                            'Релизы не найдены.\n' +
+                            (search.errors.join('\n') || 'Нет результатов.')
+                        );
                         return;
                     }
+
                     var hashes = [];
                     var itemHashes = [];
+
                     items.forEach(function (item) {
                         var hash = extractHash(item);
                         itemHashes.push(hash);
                         if (hash) hashes.push(hash);
                     });
-                    setStatus('Найдено: ' + items.length +
+
+                    setStatus(
+                        'Найдено: ' + items.length +
                         '. Проверяю до ' + MAX_HASH_CHECKS +
-                        ' уникальных hash в RD…');
+                        ' уникальных hash в RD…'
+                    );
+
                     return checkHashes(
                         hashes,
                         authResult.auth,
@@ -452,21 +519,27 @@
                         }
                     ).then(function (checked) {
                         var byHash = {};
+
                         checked.results.forEach(function (item) {
                             byHash[item.hash] = item;
                         });
+
                         items.forEach(function (item, index) {
                             var hash = itemHashes[index];
                             var check = hash ? byHash[hash] : null;
                             var row = document.createElement('div');
                             row.className = 'rd-bridge-row';
+
                             var title = document.createElement('div');
                             title.className = 'rd-bridge-title';
                             title.textContent = extractTitle(item);
                             row.appendChild(title);
+
                             var meta = document.createElement('div');
                             meta.className = 'rd-bridge-meta';
+
                             var resultText;
+
                             if (!hash) {
                                 resultText = 'Hash не найден';
                             } else if (!check) {
@@ -478,31 +551,39 @@
                                     ? 'Есть в кэше RD'
                                     : 'В кэше не найдено';
                             }
+
                             meta.textContent =
                                 (item._parser || 'Парсер') + ' · ' + resultText;
                             row.appendChild(meta);
+
                             if (hash) {
                                 var hashLine = document.createElement('div');
                                 hashLine.className = 'rd-bridge-meta';
                                 hashLine.textContent = 'Hash: ' + hash;
                                 row.appendChild(hashLine);
                             }
+
                             results.appendChild(row);
                         });
+
                         var summary =
                             'Найдено: ' + items.length +
                             ' · Проверено RD: ' + checked.results.length +
-                            ' · Кэш: ' + checked.results.filter(function (r) {
+                            ' · Кэш: ' +
+                            checked.results.filter(function (r) {
                                 return r.available;
                             }).length;
+
                         if (checked.stopReason) {
                             summary += '\nПроверка остановлена: ' +
                                 checked.stopReason;
                         }
+
                         if (search.errors.length) {
                             summary += '\nОшибки парсеров:\n' +
                                 search.errors.join('\n');
                         }
+
                         setStatus(summary);
                     });
                 });
@@ -510,38 +591,41 @@
                 setStatus('Ошибка поиска: ' + error.message);
             });
         };
+
         return panel;
     }
+
     function openPanel() {
         var old = document.getElementById('rd-bridge-root');
         if (old) old.remove();
+
         var root = document.createElement('div');
         root.id = 'rd-bridge-root';
         root.style.cssText =
             'position:fixed;z-index:99999;inset:5% 5%;overflow:auto;' +
             'background:#171717;color:#fff;border-radius:12px;' +
             'box-shadow:0 0 0 100vmax rgba(0,0,0,.65)';
+
         var close = document.createElement('button');
         close.className = 'rd-bridge-button';
         close.textContent = 'Закрыть';
         close.onclick = function () {
             root.remove();
         };
+
         root.appendChild(close);
         root.appendChild(createPanel());
         document.body.appendChild(root);
     }
-    /*
-     * Регистрация компонента и кнопок в настройках Lampa.
-     */
+
     function addSettings() {
-        if (!window.Lampa ||
-            !Lampa.SettingsApi ||
+        if (!window.Lampa || !Lampa.SettingsApi ||
             typeof Lampa.SettingsApi.addComponent !== 'function' ||
             typeof Lampa.SettingsApi.addParam !== 'function' ||
             SETTINGS_REGISTERED) {
             return;
         }
+
         try {
             Lampa.SettingsApi.addComponent({
                 component: COMPONENT,
@@ -551,6 +635,7 @@
                     'stroke="currentColor" stroke-width="2"/>' +
                     '</svg>'
             });
+
             function addButton(name, title, description, callback) {
                 Lampa.SettingsApi.addParam({
                     component: COMPONENT,
@@ -566,6 +651,7 @@
                     onChange: callback
                 });
             }
+
             addButton(
                 'rd_oauth_start_v2',
                 'Подключить Real-Debrid',
@@ -576,6 +662,7 @@
                     });
                 }
             );
+
             addButton(
                 'rd_oauth_check_v2',
                 'Проверить подключение',
@@ -592,6 +679,7 @@
                     });
                 }
             );
+
             addButton(
                 'rd_oauth_disconnect_v2',
                 'Удалить локальные данные',
@@ -601,6 +689,7 @@
                     notify('Локальные данные RD удалены.');
                 }
             );
+
             addButton(
                 'rd_search_cached_v1',
                 'Поиск закэшированных раздач',
@@ -609,6 +698,7 @@
                     openPanel();
                 }
             );
+
             SETTINGS_REGISTERED = true;
             console.log(
                 '[' + PLUGIN_NAME + '] Настройки зарегистрированы',
@@ -622,41 +712,47 @@
             );
         }
     }
-    /*
-     * Повторные попытки инициализации.
-     * Интервал 500 мс, максимум 120 попыток — около 60 секунд.
-     */
+
     function stopInitRetry() {
         if (RD_INIT_TIMER) {
             clearTimeout(RD_INIT_TIMER);
             RD_INIT_TIMER = null;
         }
     }
+
     function scheduleInitRetry() {
         if (RD_INIT_TIMER) return;
+
         if (RD_INIT_ATTEMPTS >= RD_INIT_MAX_ATTEMPTS) {
             console.error(
-                '[' + PLUGIN_NAME + '] Не удалось зарегистрировать настройки. ' +
+                '[' + PLUGIN_NAME +
+                '] Не удалось зарегистрировать настройки. ' +
                 'Проверь доступность Lampa.SettingsApi.'
             );
             return;
         }
+
         RD_INIT_TIMER = setTimeout(function () {
             RD_INIT_TIMER = null;
             init();
         }, 500);
     }
+
     function init() {
         RD_INIT_ATTEMPTS++;
+
         if (!window.Lampa) {
             scheduleInitRetry();
             return;
         }
+
         window.rdBridgeOpen = openPanel;
+
         if (Lampa.SettingsApi &&
             typeof Lampa.SettingsApi.addComponent === 'function' &&
             typeof Lampa.SettingsApi.addParam === 'function') {
             addSettings();
+
             if (SETTINGS_REGISTERED) {
                 stopInitRetry();
                 console.log(
@@ -666,8 +762,10 @@
                 return;
             }
         }
+
         scheduleInitRetry();
     }
+
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', init);
     } else {
