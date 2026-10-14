@@ -9,7 +9,7 @@
     var STORE = 'rd_bridge_oauth_v2';
     var PARSERS = [
         'https://jr.maxvol.pro',
-        'https://jacred.xyz'
+        'https://jac.red'
     ];
 
     var polling = false;
