@@ -1,7 +1,7 @@
 (function () {
     'use strict';
     var PLUGIN_NAME = 'Real-Debrid Bridge';
-    var PLUGIN_VERSION = '1.1.1';
+    var PLUGIN_VERSION = '1.1.2';
     var COMPONENT = 'rd_bridge';
     var PROXY = 'https://lampa-rd-proxy.evgeniy4450.workers.dev/';
     var RD_API = 'https://api.real-debrid.com/rest/1.0/';
@@ -15,6 +15,9 @@
     var MAX_HASH_CHECKS = 10;
     var HASH_CHECK_DELAY = 1500;
     var SETTINGS_REGISTERED = false;
+    var RD_INIT_TIMER = null;
+    var RD_INIT_ATTEMPTS = 0;
+    var RD_INIT_MAX_ATTEMPTS = 120;
     function notify(message) {
         if (window.Lampa &&
             Lampa.Noty &&
@@ -166,9 +169,9 @@
             var started = Date.now();
             function pollCredentials() {
                 if (Date.now() - started > timeout) {
-                    throw new Error(
+                    return Promise.reject(new Error(
                         'Время авторизации истекло. Попробуй снова.'
-                    );
+                    ));
                 }
                 return postForm(OAUTH + 'device/credentials', {
                     client_id: PUBLIC_CLIENT_ID,
@@ -529,15 +532,16 @@
         document.body.appendChild(root);
     }
     /*
-     * Регистрация компонента и действий в настройках Lampa.
+     * Регистрация компонента и кнопок в настройках Lampa.
      */
     function addSettings() {
         if (!window.Lampa ||
             !Lampa.SettingsApi ||
+            typeof Lampa.SettingsApi.addComponent !== 'function' ||
+            typeof Lampa.SettingsApi.addParam !== 'function' ||
             SETTINGS_REGISTERED) {
             return;
         }
-        SETTINGS_REGISTERED = true;
         try {
             Lampa.SettingsApi.addComponent({
                 component: COMPONENT,
@@ -605,6 +609,7 @@
                     openPanel();
                 }
             );
+            SETTINGS_REGISTERED = true;
             console.log(
                 '[' + PLUGIN_NAME + '] Настройки зарегистрированы',
                 PLUGIN_VERSION
@@ -617,20 +622,51 @@
             );
         }
     }
-    function init() {
-        if (!window.Lampa) return;
-        window.rdBridgeOpen = openPanel;
-        if (Lampa.SettingsApi) {
-            addSettings();
-        } else if (Lampa.Listener &&
-            typeof Lampa.Listener.follow === 'function') {
-            Lampa.Listener.follow('app', function (event) {
-                if (event.type === 'ready') {
-                    addSettings();
-                }
-            });
+    /*
+     * Повторные попытки инициализации.
+     * Интервал 500 мс, максимум 120 попыток — около 60 секунд.
+     */
+    function stopInitRetry() {
+        if (RD_INIT_TIMER) {
+            clearTimeout(RD_INIT_TIMER);
+            RD_INIT_TIMER = null;
         }
-        console.log('[' + PLUGIN_NAME + '] Загружен', PLUGIN_VERSION);
+    }
+    function scheduleInitRetry() {
+        if (RD_INIT_TIMER) return;
+        if (RD_INIT_ATTEMPTS >= RD_INIT_MAX_ATTEMPTS) {
+            console.error(
+                '[' + PLUGIN_NAME + '] Не удалось зарегистрировать настройки. ' +
+                'Проверь доступность Lampa.SettingsApi.'
+            );
+            return;
+        }
+        RD_INIT_TIMER = setTimeout(function () {
+            RD_INIT_TIMER = null;
+            init();
+        }, 500);
+    }
+    function init() {
+        RD_INIT_ATTEMPTS++;
+        if (!window.Lampa) {
+            scheduleInitRetry();
+            return;
+        }
+        window.rdBridgeOpen = openPanel;
+        if (Lampa.SettingsApi &&
+            typeof Lampa.SettingsApi.addComponent === 'function' &&
+            typeof Lampa.SettingsApi.addParam === 'function') {
+            addSettings();
+            if (SETTINGS_REGISTERED) {
+                stopInitRetry();
+                console.log(
+                    '[' + PLUGIN_NAME + '] Инициализация завершена',
+                    PLUGIN_VERSION
+                );
+                return;
+            }
+        }
+        scheduleInitRetry();
     }
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', init);
