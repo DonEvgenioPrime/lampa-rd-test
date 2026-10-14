@@ -1,8 +1,9 @@
+
 (function () {
     'use strict';
 
     var PLUGIN_NAME = 'Real-Debrid Bridge';
-    var PLUGIN_VERSION = '1.1.3';
+    var PLUGIN_VERSION = '1.1.4-test';
     var COMPONENT = 'rd_bridge';
     var PROXY = 'https://lampa-rd-proxy.evgeniy4450.workers.dev/';
     var RD_API = 'https://api.real-debrid.com/rest/1.0/';
@@ -10,8 +11,8 @@
     var PUBLIC_CLIENT_ID = 'X245A4XAIBGVM';
     var STORE = 'rd_bridge_oauth_v2';
     var PARSERS = [
-        'https://jr.maxvol.pro',
-        'https://jac.red'
+        { name: 'MaxVol', url: 'jr.maxvol.pro', key: '' },
+        { name: 'Jacred', url: 'jacred.xyz', key: '' }
     ];
     var MAX_HASH_CHECKS = 10;
     var HASH_CHECK_DELAY = 1500;
@@ -281,11 +282,31 @@
             item.original_title || 'Без названия';
     }
 
-    function parserSearch(parser, query) {
-        var url = parser.replace(/\/$/, '') +
-            '/api/v1/search?query=' + encodeURIComponent(query);
+    /*
+     * Поиск через API Jackett-совместимых публичных индексаторов,
+     * по логике запроса из плагина TorBox.
+     */
+    function parserSearch(parser, query, originalTitle, year) {
+        var title = String(query || '').trim();
+        var original = String(originalTitle || '').trim();
+        var searchYear = String(year || '').trim().slice(0, 4);
+        var queryBase = (title + ' ' + searchYear).trim();
+
+        var params = new URLSearchParams({
+            Query: queryBase,
+            title: title,
+            title_original: original,
+            Category: '2000,5000'
+        });
+
+        if (parser.key) params.set('apikey', parser.key);
+        if (searchYear) params.set('year', searchYear);
+
+        var url = 'https://' + parser.url +
+            '/api/v2.0/indexers/all/results?' + params.toString();
 
         return request(proxyUrl(url)).then(function (data) {
+            if (data && Array.isArray(data.Results)) return data.Results;
             if (Array.isArray(data)) return data;
             if (data && Array.isArray(data.results)) return data.results;
             if (data && Array.isArray(data.items)) return data.items;
@@ -294,19 +315,21 @@
         });
     }
 
-    function searchParsers(query) {
+    function searchParsers(query, originalTitle, year) {
         var results = [];
         var errors = [];
 
         return PARSERS.reduce(function (chain, parser) {
             return chain.then(function () {
-                return parserSearch(parser, query).then(function (items) {
+                return parserSearch(
+                    parser, query, originalTitle, year
+                ).then(function (items) {
                     items.forEach(function (item) {
-                        item._parser = parser;
+                        item._parser = parser.name;
                         results.push(item);
                     });
                 }).catch(function (error) {
-                    errors.push(parser + ': ' + error.message);
+                    errors.push(parser.name + ': ' + error.message);
                 });
             });
         }, Promise.resolve()).then(function () {
@@ -377,7 +400,7 @@
                 }
 
                 if (result.error &&
-                    /HTTP 401|bad_token|HTTP 429|too_many_requests/i.test(
+                    /HTTP 401|bad_token|HTTP 403|disabled_endpoint|HTTP 429|too_many_requests/i.test(
                         result.error
                     )) {
                     stopped = true;
@@ -484,7 +507,7 @@
             getWorkingAuth().then(function (authResult) {
                 setStatus('Ищу релизы…');
 
-                return searchParsers(query).then(function (search) {
+                return searchParsers(query, query, '').then(function (search) {
                     var items = search.items;
 
                     if (!items.length) {
