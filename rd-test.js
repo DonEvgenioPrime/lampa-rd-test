@@ -1,7 +1,7 @@
 (function () {
     'use strict';
     var PLUGIN_NAME = 'Real-Debrid Bridge';
-    var PLUGIN_VERSION = '1.0.3';
+    var PLUGIN_VERSION = '1.1.0';
     var PROXY = 'https://lampa-rd-proxy.evgeniy4450.workers.dev/';
     var RD_API = 'https://api.real-debrid.com/rest/1.0/';
     var OAUTH = 'https://api.real-debrid.com/oauth/v2/';
@@ -12,16 +12,10 @@
         'https://jac.red'
     ];
     var MAX_HASH_CHECKS = 10;
-    var HASH_CHECK_DELAY = 700;
-    var stylesAdded = false;
-    function log() {
-        var args = Array.prototype.slice.call(arguments);
-        args.unshift('[' + PLUGIN_NAME + ']');
-        console.log.apply(console, args);
-    }
+    var HASH_CHECK_DELAY = 1500;
+    var STOP_ON_RD_ERROR = true;
     function notify(message) {
-        if (typeof Lampa !== 'undefined' &&
-            Lampa.Noty &&
+        if (window.Lampa && Lampa.Noty &&
             typeof Lampa.Noty.show === 'function') {
             Lampa.Noty.show(message);
         } else {
@@ -29,22 +23,21 @@
         }
     }
     function request(url, options) {
-        options = options || {};
-        return fetch(url, options).then(function (response) {
+        return fetch(url, options || {}).then(function (response) {
             return response.text().then(function (text) {
-                var data = {};
+                var data;
                 try {
                     data = text ? JSON.parse(text) : {};
                 } catch (e) {
-                    data = { error: text || 'Empty response' };
+                    data = { message: text };
                 }
                 if (!response.ok) {
                     var message =
                         data.error_description ||
                         data.error ||
                         data.message ||
-                        text ||
-                        response.statusText;
+                        response.statusText ||
+                        'Неизвестная ошибка';
                     throw new Error(
                         'HTTP ' + response.status + ': ' + message
                     );
@@ -73,12 +66,12 @@
     function proxyUrl(url) {
         return PROXY + '?url=' + encodeURIComponent(url);
     }
-    function getStoredAuth() {
+    function readAuth() {
         try {
-            var raw = localStorage.getItem(STORE);
-            return raw ? JSON.parse(raw) : null;
+            return JSON.parse(
+                localStorage.getItem(STORE) || 'null'
+            );
         } catch (e) {
-            log('Не удалось прочитать сохранённую авторизацию', e);
             return null;
         }
     }
@@ -88,46 +81,36 @@
     function clearAuth() {
         localStorage.removeItem(STORE);
     }
-    function profile(accessToken) {
+    function profile(token) {
         return request(proxyUrl(RD_API + 'user'), {
             headers: {
-                Authorization: 'Bearer ' + accessToken
+                Authorization: 'Bearer ' + token
             }
         });
     }
-    /*
-     * ВАЖНО:
-     * Для OAuth Device Flow Real-Debrid ожидает:
-     * code = сохранённый refresh_token
-     * grant_type = http://oauth.net/grant_type/device/1.0
-     */
-    function refreshAccessToken(saved) {
-        if (!saved ||
-            !saved.refresh_token ||
-            !saved.client_id ||
-            !saved.client_secret) {
-            return Promise.reject(
-                new Error(
-                    'Нет данных для обновления токена. ' +
-                    'Отключи и заново подключи Real-Debrid.'
-                )
-            );
+    function refreshAccessToken(auth) {
+        if (!auth || !auth.refresh_token ||
+            !auth.client_id || !auth.client_secret) {
+            return Promise.reject(new Error(
+                'Нет данных для обновления токена. ' +
+                'Нужно подключить RD заново.'
+            ));
         }
         return postForm(OAUTH + 'token', {
-            client_id: saved.client_id,
-            client_secret: saved.client_secret,
-            code: saved.refresh_token,
+            client_id: auth.client_id,
+            client_secret: auth.client_secret,
+            code: auth.refresh_token,
             grant_type: 'http://oauth.net/grant_type/device/1.0'
         }).then(function (tokens) {
             if (!tokens.access_token) {
                 throw new Error(
-                    'Real-Debrid не вернул новый access_token.'
+                    'RD не вернул новый access_token.'
                 );
             }
-            var updated = Object.assign({}, saved, {
+            var updated = Object.assign({}, auth, {
                 access_token: tokens.access_token,
                 refresh_token:
-                    tokens.refresh_token || saved.refresh_token,
+                    tokens.refresh_token || auth.refresh_token,
                 expires_in: Number(tokens.expires_in) || 0,
                 obtained_at: Date.now()
             });
@@ -136,91 +119,87 @@
         });
     }
     function getWorkingAuth() {
-        var saved = getStoredAuth();
-        if (!saved || !saved.access_token) {
-            return Promise.reject(
-                new Error('Real-Debrid не подключён.')
-            );
+        var auth = readAuth();
+        if (!auth || !auth.access_token) {
+            return Promise.reject(new Error(
+                'Real-Debrid не подключён. Нажми «Подключить RD».'
+            ));
         }
-        return profile(saved.access_token).then(function (user) {
-            return {
-                auth: saved,
-                user: user
-            };
+        return profile(auth.access_token).then(function (user) {
+            return { auth: auth, user: user };
         }).catch(function (error) {
-            if (!/HTTP 401|bad_token|unauthorized/i.test(error.message)) {
+            if (!/HTTP 401|bad_token|unauthorized/i.test(
+                error.message
+            )) {
                 throw error;
             }
-            log('Access token недействителен, пробую обновить');
-            return refreshAccessToken(saved).then(function (updated) {
+            return refreshAccessToken(auth).then(function (updated) {
                 return profile(updated.access_token).then(function (user) {
-                    return {
-                        auth: updated,
-                        user: user
-                    };
+                    return { auth: updated, user: user };
                 });
             });
         });
     }
-    function beginDeviceAuth() {
+    function connectAuth() {
         return postForm(OAUTH + 'device/code', {
             client_id: PUBLIC_CLIENT_ID,
             new_credentials: 'yes'
         }).then(function (device) {
             if (!device.device_code) {
                 throw new Error(
-                    'Real-Debrid не вернул device_code.'
+                    'RD не вернул device_code.'
                 );
             }
-            var verificationUrl =
-                device.direct_verification_url ||
-                device.verification_url ||
+            var url = device.verification_url ||
                 'https://real-debrid.com/device';
-            var userCode = device.user_code || '';
-            var message =
-                'Открой страницу авторизации Real-Debrid:\n\n' +
-                verificationUrl +
-                '\n\nКод: ' + userCode +
-                '\n\nПосле подтверждения вернись в Lampa.';
-            if (confirm(message)) {
-                window.open(verificationUrl, '_blank');
-            }
             notify(
-                'Подтверди подключение Real-Debrid. ' +
-                'Ожидаю авторизацию…'
+                'Открой страницу авторизации RD:\n' + url +
+                '\n\nКод: ' + (device.user_code || '') +
+                '\n\nПосле подтверждения вернись в Lampa.'
             );
-            return pollDeviceToken(device, verificationUrl);
-        });
-    }
-    function pollDeviceToken(device, verificationUrl) {
-        var interval = Number(device.interval) || 5;
-        var expiresIn = Number(device.expires_in) || 600;
-        var startedAt = Date.now();
-        function poll() {
-            if (Date.now() - startedAt > expiresIn * 1000) {
-                throw new Error(
-                    'Время авторизации истекло. Попробуй подключиться снова.'
-                );
+            window.open(url, '_blank');
+            var interval = Math.max(
+                5, Number(device.interval) || 5
+            ) * 1000;
+            var timeout = (Number(device.expires_in) || 600) * 1000;
+            var started = Date.now();
+            function pollCredentials() {
+                if (Date.now() - started > timeout) {
+                    throw new Error(
+                        'Время авторизации истекло. Попробуй снова.'
+                    );
+                }
+                return postForm(OAUTH + 'device/credentials', {
+                    client_id: PUBLIC_CLIENT_ID,
+                    code: device.device_code
+                }).catch(function (error) {
+                    if (/HTTP 400|authorization_pending|slow_down/i.test(
+                        error.message
+                    )) {
+                        return new Promise(function (resolve) {
+                            setTimeout(resolve, interval);
+                        }).then(pollCredentials);
+                    }
+                    throw error;
+                });
             }
-            return postForm(OAUTH + 'device/credentials', {
-                client_id: PUBLIC_CLIENT_ID,
-                code: device.device_code
-            }).then(function (credentials) {
+            return pollCredentials().then(function (credentials) {
                 if (!credentials.client_id ||
                     !credentials.client_secret) {
                     throw new Error(
-                        'Real-Debrid не вернул данные клиента.'
+                        'RD не вернул client_id/client_secret.'
                     );
                 }
                 return postForm(OAUTH + 'token', {
                     client_id: credentials.client_id,
                     client_secret: credentials.client_secret,
                     code: device.device_code,
-                    grant_type: 'http://oauth.net/grant_type/device/1.0'
+                    grant_type:
+                        'http://oauth.net/grant_type/device/1.0'
                 }).then(function (tokens) {
                     if (!tokens.access_token) {
                         throw new Error(
-                            'Real-Debrid не вернул access_token.'
+                            'RD не вернул access_token.'
                         );
                     }
                     var auth = {
@@ -234,92 +213,13 @@
                     saveAuth(auth);
                     return profile(auth.access_token).then(function (user) {
                         notify(
-                            'Real-Debrid подключён: ' +
-                            (user.username || user.email || 'OK')
+                            'RD подключён: ' +
+                            (user.username || user.email || user.id || 'OK')
                         );
-                        return {
-                            auth: auth,
-                            user: user
-                        };
+                        return { auth: auth, user: user };
                     });
                 });
-            }).catch(function (error) {
-                var message = String(error.message || '');
-                if (/authorization_pending|slow_down|HTTP 400/i.test(message)) {
-                    return new Promise(function (resolve) {
-                        setTimeout(resolve, interval * 1000);
-                    }).then(poll);
-                }
-                throw error;
             });
-        }
-        return poll();
-    }
-    function checkAuth() {
-        notify('Проверяю подключение Real-Debrid…');
-        return getWorkingAuth().then(function (result) {
-            var user = result.user || {};
-            var username =
-                user.username ||
-                user.email ||
-                user.id ||
-                'подключение активно';
-            notify('Real-Debrid OK: ' + username);
-            return result;
-        }).catch(function (error) {
-            notify('Проверка RD не пройдена: ' + error.message);
-            throw error;
-        });
-    }
-    function connectAuth() {
-        notify('Подключаю Real-Debrid…');
-        return beginDeviceAuth().catch(function (error) {
-            notify('Ошибка подключения RD: ' + error.message);
-            throw error;
-        });
-    }
-    function apiRequest(path, auth) {
-        return request(proxyUrl(RD_API + path), {
-            headers: {
-                Authorization: 'Bearer ' + auth.access_token
-            }
-        });
-    }
-    function normalizeHash(hash) {
-        return String(hash || '').trim().toLowerCase();
-    }
-    function getTorrentInfo(hash, auth) {
-        hash = normalizeHash(hash);
-        if (!hash) {
-            return Promise.resolve({
-                hash: hash,
-                available: false,
-                error: 'Пустой hash'
-            });
-        }
-        return apiRequest(
-            'torrents/instantAvailability/' + encodeURIComponent(hash),
-            auth
-        ).then(function (data) {
-            var available = false;
-            if (data && data[hash]) {
-                var item = data[hash];
-                available = !!(
-                    item.rd &&
-                    Object.keys(item.rd).length
-                );
-            }
-            return {
-                hash: hash,
-                available: available,
-                data: data
-            };
-        }).catch(function (error) {
-            return {
-                hash: hash,
-                available: false,
-                error: error.message
-            };
         });
     }
     function delay(ms) {
@@ -327,59 +227,30 @@
             setTimeout(resolve, ms);
         });
     }
-    function checkHashesSequentially(hashes, auth) {
-        var unique = [];
-        var seen = {};
-        hashes.forEach(function (hash) {
-            hash = normalizeHash(hash);
-            if (hash && !seen[hash]) {
-                seen[hash] = true;
-                unique.push(hash);
-            }
-        });
-        unique = unique.slice(0, MAX_HASH_CHECKS);
-        var results = [];
-        function next(index) {
-            if (index >= unique.length) {
-                return Promise.resolve(results);
-            }
-            return getTorrentInfo(unique[index], auth).then(function (result) {
-                results.push(result);
-                if (index + 1 < unique.length) {
-                    return delay(HASH_CHECK_DELAY).then(function () {
-                        return next(index + 1);
-                    });
-                }
-                return results;
-            });
-        }
-        return next(0);
+    function normalizeHash(value) {
+        return String(value || '').trim().toLowerCase();
     }
     function extractHash(item) {
         if (!item) return '';
-        var candidates = [
+        var values = [
             item.hash,
             item.info_hash,
             item.infoHash,
             item.torrent_hash,
             item.magnet
         ];
-        for (var i = 0; i < candidates.length; i++) {
-            var value = String(candidates[i] || '');
-            var magnetMatch = value.match(/btih:([a-f0-9]{40})/i);
-            if (magnetMatch) return magnetMatch[1].toLowerCase();
-            var hashMatch = value.match(/\b[a-f0-9]{40}\b/i);
-            if (hashMatch) return hashMatch[0].toLowerCase();
+        for (var i = 0; i < values.length; i++) {
+            var value = String(values[i] || '');
+            var magnet = value.match(/btih:([a-f0-9]{40})/i);
+            if (magnet) return magnet[1].toLowerCase();
+            var hash = value.match(/\b[a-f0-9]{40}\b/i);
+            if (hash) return hash[0].toLowerCase();
         }
         return '';
     }
     function extractTitle(item) {
-        if (!item) return 'Без названия';
-        return item.title ||
-            item.name ||
-            item.release ||
-            item.original_title ||
-            'Без названия';
+        return item.title || item.name || item.release ||
+            item.original_title || 'Без названия';
     }
     function parserSearch(parser, query) {
         var url = parser.replace(/\/$/, '') +
@@ -394,42 +265,110 @@
         });
     }
     function searchParsers(query) {
-        var all = [];
+        var results = [];
         var errors = [];
         return PARSERS.reduce(function (chain, parser) {
             return chain.then(function () {
                 return parserSearch(parser, query).then(function (items) {
                     items.forEach(function (item) {
                         item._parser = parser;
-                        all.push(item);
+                        results.push(item);
                     });
                 }).catch(function (error) {
                     errors.push(parser + ': ' + error.message);
-                    log('Ошибка парсера', parser, error.message);
                 });
             });
         }, Promise.resolve()).then(function () {
+            return { items: results, errors: errors };
+        });
+    }
+    function checkHash(hash, auth) {
+        var url = RD_API + 'torrents/instantAvailability/' +
+            encodeURIComponent(hash);
+        return request(proxyUrl(url), {
+            headers: {
+                Authorization: 'Bearer ' + auth.access_token
+            }
+        }).then(function (data) {
+            var item = data && data[hash];
             return {
-                items: all,
-                errors: errors
+                hash: hash,
+                available: !!(
+                    item && item.rd &&
+                    Object.keys(item.rd).length
+                )
+            };
+        }).catch(function (error) {
+            return {
+                hash: hash,
+                available: false,
+                error: error.message
             };
         });
     }
+    function checkHashes(hashes, auth, onProgress) {
+        var unique = [];
+        var seen = {};
+        hashes.forEach(function (hash) {
+            hash = normalizeHash(hash);
+            if (hash && !seen[hash]) {
+                seen[hash] = true;
+                unique.push(hash);
+            }
+        });
+        unique = unique.slice(0, MAX_HASH_CHECKS);
+        var results = [];
+        var stopped = false;
+        var stopReason = '';
+        function next(index) {
+            if (index >= unique.length || stopped) {
+                return Promise.resolve({
+                    results: results,
+                    total: unique.length,
+                    stopped: stopped,
+                    stopReason: stopReason
+                });
+            }
+            return checkHash(unique[index], auth).then(function (result) {
+                results.push(result);
+                if (onProgress) {
+                    onProgress(index + 1, unique.length, result);
+                }
+                if (result.error &&
+                    STOP_ON_RD_ERROR &&
+                    /HTTP 401|bad_token|HTTP 429|too_many_requests/i.test(
+                        result.error
+                    )) {
+                    stopped = true;
+                    stopReason = result.error;
+                }
+                if (index + 1 < unique.length && !stopped) {
+                    return delay(HASH_CHECK_DELAY).then(function () {
+                        return next(index + 1);
+                    });
+                }
+                return {
+                    results: results,
+                    total: unique.length,
+                    stopped: stopped,
+                    stopReason: stopReason
+                };
+            });
+        }
+        return next(0);
+    }
     function addStyles() {
-        if (stylesAdded) return;
-        stylesAdded = true;
-        var css = [
-            '.rd-bridge-panel{padding:16px;color:inherit}',
-            '.rd-bridge-row{padding:12px;margin:8px 0;border-radius:8px;background:rgba(127,127,127,.12)}',
-            '.rd-bridge-title{font-weight:600;margin-bottom:6px}',
-            '.rd-bridge-meta{font-size:12px;opacity:.75;overflow-wrap:anywhere}',
-            '.rd-bridge-button{display:inline-block;padding:10px 14px;margin:4px;border-radius:6px;background:#7a5cff;color:#fff;cursor:pointer;border:0}',
-            '.rd-bridge-button:disabled{opacity:.5}',
-            '.rd-bridge-status{margin:8px 0;white-space:pre-wrap;overflow-wrap:anywhere}',
-            '.rd-bridge-input{box-sizing:border-box;width:100%;padding:12px;margin:8px 0;color:inherit;background:rgba(127,127,127,.12);border:1px solid rgba(127,127,127,.35);border-radius:6px}'
-        ].join('');
+        if (document.getElementById('rd-bridge-style')) return;
         var style = document.createElement('style');
-        style.textContent = css;
+        style.id = 'rd-bridge-style';
+        style.textContent =
+            '.rd-bridge-panel{padding:16px;color:inherit}' +
+            '.rd-bridge-row{padding:12px;margin:8px 0;border-radius:8px;background:rgba(127,127,127,.12)}' +
+            '.rd-bridge-title{font-weight:600;margin-bottom:6px}' +
+            '.rd-bridge-meta{font-size:12px;opacity:.8;overflow-wrap:anywhere}' +
+            '.rd-bridge-button{display:inline-block;padding:10px 14px;margin:4px;border-radius:6px;background:#7a5cff;color:#fff;cursor:pointer;border:0}' +
+            '.rd-bridge-status{margin:8px 0;white-space:pre-wrap;overflow-wrap:anywhere}' +
+            '.rd-bridge-input{box-sizing:border-box;width:100%;padding:12px;margin:8px 0;color:inherit;background:rgba(127,127,127,.12);border:1px solid rgba(127,127,127,.35);border-radius:6px}';
         document.head.appendChild(style);
     }
     function createPanel() {
@@ -437,139 +376,127 @@
         var panel = document.createElement('div');
         panel.className = 'rd-bridge-panel';
         panel.innerHTML =
-            '<div class="rd-bridge-title">Real-Debrid Bridge</div>' +
-            '<div class="rd-bridge-status" id="rd-bridge-status">' +
-            'Готов к работе. Версия ' + PLUGIN_VERSION +
-            '</div>' +
-            '<button class="rd-bridge-button" id="rd-bridge-connect">' +
-            'Подключить RD</button>' +
-            '<button class="rd-bridge-button" id="rd-bridge-check">' +
-            'Проверить подключение</button>' +
-            '<button class="rd-bridge-button" id="rd-bridge-disconnect">' +
-            'Отключить RD</button>' +
+            '<div class="rd-bridge-title">Real-Debrid — кэш</div>' +
+            '<div class="rd-bridge-status" id="rd-status">Версия ' +
+            PLUGIN_VERSION + '</div>' +
+            '<button class="rd-bridge-button" id="rd-connect">Подключить RD</button>' +
+            '<button class="rd-bridge-button" id="rd-check">Проверить подключение</button>' +
+            '<button class="rd-bridge-button" id="rd-disconnect">Отключить RD</button>' +
             '<hr>' +
-            '<input class="rd-bridge-input" id="rd-bridge-query" ' +
-            'placeholder="Название фильма или сериала">' +
-            '<button class="rd-bridge-button" id="rd-bridge-search">' +
-            'Найти раздачи</button>' +
-            '<div id="rd-bridge-results"></div>';
-        var status = panel.querySelector('#rd-bridge-status');
-        var results = panel.querySelector('#rd-bridge-results');
+            '<input class="rd-bridge-input" id="rd-query" placeholder="Название фильма или сериала">' +
+            '<button class="rd-bridge-button" id="rd-search">Найти раздачи</button>' +
+            '<div id="rd-results"></div>';
+        var status = panel.querySelector('#rd-status');
+        var results = panel.querySelector('#rd-results');
         function setStatus(text) {
             status.textContent = text;
         }
-        panel.querySelector('#rd-bridge-connect').onclick = function () {
-            setStatus('Ожидаю авторизацию Real-Debrid…');
+        panel.querySelector('#rd-connect').onclick = function () {
+            setStatus('Ожидаю авторизацию RD…');
             connectAuth().then(function (result) {
-                var user = result.user || {};
-                setStatus(
-                    'Подключено: ' +
-                    (user.username || user.email || user.id || 'OK')
-                );
+                setStatus('Подключено: ' +
+                    (result.user.username || result.user.email || 'OK'));
             }).catch(function (error) {
-                setStatus('Ошибка: ' + error.message);
+                setStatus('Ошибка подключения: ' + error.message);
             });
         };
-        panel.querySelector('#rd-bridge-check').onclick = function () {
-            setStatus('Проверяю подключение…');
-            checkAuth().then(function (result) {
-                var user = result.user || {};
-                setStatus(
-                    'Подключение работает: ' +
-                    (user.username || user.email || user.id || 'OK')
-                );
+        panel.querySelector('#rd-check').onclick = function () {
+            setStatus('Проверяю RD…');
+            getWorkingAuth().then(function (result) {
+                setStatus('RD работает: ' +
+                    (result.user.username || result.user.email || 'OK'));
             }).catch(function (error) {
-                setStatus('Ошибка: ' + error.message);
+                setStatus('Проверка не пройдена: ' + error.message);
             });
         };
-        panel.querySelector('#rd-bridge-disconnect').onclick = function () {
+        panel.querySelector('#rd-disconnect').onclick = function () {
             clearAuth();
-            setStatus('Локальные данные авторизации удалены.');
-            notify('Real-Debrid отключён в плагине.');
+            setStatus('Локальная авторизация удалена. Подключи RD заново.');
         };
-        panel.querySelector('#rd-bridge-search').onclick = function () {
-            var query = panel.querySelector('#rd-bridge-query').value.trim();
+        panel.querySelector('#rd-search').onclick = function () {
+            var query = panel.querySelector('#rd-query').value.trim();
             if (!query) {
                 notify('Введи название фильма или сериала.');
                 return;
             }
             results.innerHTML = '';
-            setStatus('Ищу раздачи…');
-            getWorkingAuth().then(function (result) {
-                var auth = result.auth;
+            setStatus('Проверяю авторизацию…');
+            getWorkingAuth().then(function (authResult) {
+                setStatus('Ищу релизы…');
                 return searchParsers(query).then(function (search) {
                     var items = search.items;
                     if (!items.length) {
-                        setStatus(
-                            'Ничего не найдено.\n' +
-                            (search.errors.length
-                                ? search.errors.join('\n')
-                                : 'Парсеры не вернули результатов.')
-                        );
+                        setStatus('Релизы не найдены.\n' +
+                            (search.errors.join('\n') || 'Нет результатов.'));
                         return;
                     }
                     var hashes = [];
-                    var hashByItem = [];
+                    var itemHashes = [];
                     items.forEach(function (item) {
                         var hash = extractHash(item);
-                        hashByItem.push(hash);
+                        itemHashes.push(hash);
                         if (hash) hashes.push(hash);
                     });
-                    setStatus(
-                        'Найдено раздач: ' + items.length +
+                    setStatus('Найдено: ' + items.length +
                         '. Проверяю до ' + MAX_HASH_CHECKS +
-                        ' hash в Real-Debrid…'
-                    );
-                    return checkHashesSequentially(hashes, auth).then(
-                        function (checked) {
-                            var byHash = {};
-                            checked.forEach(function (result) {
-                                byHash[result.hash] = result;
-                            });
-                            items.forEach(function (item, index) {
-                                var hash = hashByItem[index];
-                                var check = hash ? byHash[hash] : null;
-                                var row = document.createElement('div');
-                                row.className = 'rd-bridge-row';
-                                var title = document.createElement('div');
-                                title.className = 'rd-bridge-title';
-                                title.textContent = extractTitle(item);
-                                var meta = document.createElement('div');
-                                meta.className = 'rd-bridge-meta';
-                                var parser = item._parser || 'Парсер';
-                                var statusText = !hash
-                                    ? 'Hash не найден'
-                                    : !check
-                                        ? 'Не проверено (лимит проверки)'
-                                        : check.error
-                                            ? 'Ошибка RD: ' + check.error
-                                            : check.available
-                                                ? 'Есть в кэше RD'
-                                                : 'В кэше не найдено';
-                                meta.textContent = parser + ' · ' + statusText;
-                                row.appendChild(title);
-                                row.appendChild(meta);
-                                if (hash) {
-                                    var hashLine = document.createElement('div');
-                                    hashLine.className = 'rd-bridge-meta';
-                                    hashLine.textContent = 'Hash: ' + hash;
-                                    row.appendChild(hashLine);
-                                }
-                                results.appendChild(row);
-                            });
-                            setStatus(
-                                'Поиск завершён. Результатов: ' + items.length +
-                                '. Проверено hash: ' + checked.length + '.'
-                            );
-                            if (search.errors.length) {
-                                setStatus(
-                                    status.textContent + '\n' +
-                                    'Ошибки парсеров:\n' +
-                                    search.errors.join('\n')
-                                );
+                        ' уникальных hash в RD…');
+                    return checkHashes(hashes, authResult.auth, function (done, total) {
+                        setStatus('Проверка RD: ' + done + ' из ' + total);
+                    }).then(function (checked) {
+                        var byHash = {};
+                        checked.results.forEach(function (item) {
+                            byHash[item.hash] = item;
+                        });
+                        items.forEach(function (item, index) {
+                            var hash = itemHashes[index];
+                            var check = hash ? byHash[hash] : null;
+                            var row = document.createElement('div');
+                            row.className = 'rd-bridge-row';
+                            var title = document.createElement('div');
+                            title.className = 'rd-bridge-title';
+                            title.textContent = extractTitle(item);
+                            row.appendChild(title);
+                            var meta = document.createElement('div');
+                            meta.className = 'rd-bridge-meta';
+                            var resultText;
+                            if (!hash) {
+                                resultText = 'Hash не найден';
+                            } else if (!check) {
+                                resultText = 'Не проверено';
+                            } else if (check.error) {
+                                resultText = 'Ошибка RD: ' + check.error;
+                            } else {
+                                resultText = check.available
+                                    ? 'Есть в кэше RD'
+                                    : 'В кэше не найдено';
                             }
+                            meta.textContent =
+                                (item._parser || 'Парсер') + ' · ' + resultText;
+                            row.appendChild(meta);
+                            if (hash) {
+                                var hashLine = document.createElement('div');
+                                hashLine.className = 'rd-bridge-meta';
+                                hashLine.textContent = 'Hash: ' + hash;
+                                row.appendChild(hashLine);
+                            }
+                            results.appendChild(row);
+                        });
+                        var summary =
+                            'Найдено: ' + items.length +
+                            ' · Проверено RD: ' + checked.results.length +
+                            ' · Кэш: ' + checked.results.filter(function (r) {
+                                return r.available;
+                            }).length;
+                        if (checked.stopReason) {
+                            summary += '\nПроверка остановлена: ' +
+                                checked.stopReason;
                         }
-                    );
+                        if (search.errors.length) {
+                            summary += '\nОшибки парсеров:\n' +
+                                search.errors.join('\n');
+                        }
+                        setStatus(summary);
+                    });
                 });
             }).catch(function (error) {
                 setStatus('Ошибка поиска: ' + error.message);
@@ -577,64 +504,33 @@
         };
         return panel;
     }
-    function addLampaPlugin() {
-        if (typeof Lampa === 'undefined') {
-            log('Lampa ещё не загружена');
-            return;
-        }
-        var panel = createPanel();
-        /*
-         * Панель можно открыть из консоли браузера через:
-         * window.rdBridgeOpen()
-         *
-         * Интеграция в меню зависит от сборки Lampa.
-         * Не добавляем неизвестные пункты API, чтобы не ломать запуск.
-         */
-        window.rdBridgeOpen = function () {
-            var old = document.getElementById('rd-bridge-root');
-            if (old) old.remove();
-            var root = document.createElement('div');
-            root.id = 'rd-bridge-root';
-            root.style.position = 'fixed';
-            root.style.zIndex = '99999';
-            root.style.inset = '5% 5%';
-            root.style.overflow = 'auto';
-            root.style.background = '#171717';
-            root.style.color = '#fff';
-            root.style.borderRadius = '12px';
-            root.style.boxShadow = '0 0 0 100vmax rgba(0,0,0,.65)';
-            var close = document.createElement('button');
-            close.className = 'rd-bridge-button';
-            close.textContent = 'Закрыть';
-            close.onclick = function () {
-                root.remove();
-            };
-            root.appendChild(close);
-            root.appendChild(panel.cloneNode(true));
-            document.body.appendChild(root);
-            /*
-             * Назначаем обработчики заново для клонированной панели.
-             */
+    function openPanel() {
+        var old = document.getElementById('rd-bridge-root');
+        if (old) old.remove();
+        var root = document.createElement('div');
+        root.id = 'rd-bridge-root';
+        root.style.cssText =
+            'position:fixed;z-index:99999;inset:5% 5%;overflow:auto;' +
+            'background:#171717;color:#fff;border-radius:12px;' +
+            'box-shadow:0 0 0 100vmax rgba(0,0,0,.65)';
+        var close = document.createElement('button');
+        close.className = 'rd-bridge-button';
+        close.textContent = 'Закрыть';
+        close.onclick = function () {
             root.remove();
-            var liveRoot = document.createElement('div');
-            liveRoot.id = 'rd-bridge-root';
-            liveRoot.style.cssText = root.style.cssText;
-            var livePanel = createPanel();
-            var liveClose = document.createElement('button');
-            liveClose.className = 'rd-bridge-button';
-            liveClose.textContent = 'Закрыть';
-            liveClose.onclick = function () {
-                liveRoot.remove();
-            };
-            liveRoot.appendChild(liveClose);
-            liveRoot.appendChild(livePanel);
-            document.body.appendChild(liveRoot);
         };
-        log('Загружен', PLUGIN_VERSION);
+        root.appendChild(close);
+        root.appendChild(createPanel());
+        document.body.appendChild(root);
+    }
+    function init() {
+        if (typeof Lampa === 'undefined') return;
+        window.rdBridgeOpen = openPanel;
+        console.log('[' + PLUGIN_NAME + '] Загружен', PLUGIN_VERSION);
     }
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', addLampaPlugin);
+        document.addEventListener('DOMContentLoaded', init);
     } else {
-        addLampaPlugin();
+        init();
     }
 })();
