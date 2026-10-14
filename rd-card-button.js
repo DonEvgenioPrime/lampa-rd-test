@@ -5,7 +5,7 @@ window.__rd_card_button_search = true;
 var PROXY = 'https://lampa-rd-proxy.evgeniy4450.workers.dev/';
 var RD = 'https://api.real-debrid.com/rest/1.0/';
 var STORE = 'rd_bridge_oauth_v2';
-var PARSERS = ['https://jr.maxvol.pro', 'https://jac.red'];
+var PARSERS = ['https://jr.maxvol.pro', 'https://jacred.xyz'];
 function token() {
   try {
     return JSON.parse(localStorage.getItem(STORE) || '{}').access_token || '';
