@@ -3,57 +3,74 @@
 if (window.__rd_card_button_search) return;
 window.__rd_card_button_search = true;
 var PROXY = 'https://lampa-rd-proxy.evgeniy4450.workers.dev/';
-var RD = 'https://api.real-debrid.com/rest/1.0/';
 var STORE = 'rd_bridge_oauth_v2';
-var PARSERS = ['https://jr.maxvol.pro', 'https://jacred.xyz'];
+// Оставляем только проверенный источник.
+// jacred.xyz сейчас возвращает ошибку и не используется.
+var PARSERS = ['https://jr.maxvol.pro'];
 function token() {
   try {
-    return JSON.parse(localStorage.getItem(STORE) || '{}').access_token || '';
+    return JSON.parse(
+      localStorage.getItem(STORE) || '{}'
+    ).access_token || '';
   } catch (e) {
     return '';
   }
 }
 function note(s) {
-  if (window.Lampa && Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show(s);
+  if (window.Lampa && Lampa.Noty && Lampa.Noty.show) {
+    Lampa.Noty.show(s);
+  }
 }
 function req(url, access) {
   var h = { Accept: 'application/json' };
   if (access) h.Authorization = 'Bearer ' + access;
-  return fetch(PROXY + '?url=' + encodeURIComponent(url), { headers: h })
-    .then(function (r) {
-      return r.text().then(function (t) {
-        var d;
-        try {
-          d = t ? JSON.parse(t) : {};
-        } catch (e) {
-          d = { message: t };
-        }
-        if (!r.ok) {
-          var err = new Error(d.error || d.message || ('HTTP ' + r.status));
-          err.status = r.status;
-          throw err;
-        }
-        return d;
-      });
+  return fetch(
+    PROXY + '?url=' + encodeURIComponent(url),
+    { headers: h }
+  ).then(function (r) {
+    return r.text().then(function (t) {
+      var d;
+      try {
+        d = t ? JSON.parse(t) : {};
+      } catch (e) {
+        d = { message: t };
+      }
+      if (!r.ok) {
+        var err = new Error(
+          d.error || d.message || ('HTTP ' + r.status)
+        );
+        err.status = r.status;
+        throw err;
+      }
+      return d;
     });
+  });
 }
 function hashOf(x) {
-  var h = x.InfoHash || x.infoHash || x.info_hash || x.Hash || x.hash || '';
-  if (/^[a-f0-9]{40}$/i.test(String(h))) return String(h).toLowerCase();
+  var h = x.InfoHash || x.infoHash ||
+    x.info_hash || x.Hash || x.hash || '';
+  if (/^[a-f0-9]{40}$/i.test(String(h))) {
+    return String(h).toLowerCase();
+  }
   var m = String(
-    x.MagnetUri || x.magnetUri || x.magnet || x.link || x.Link || ''
+    x.MagnetUri || x.magnetUri ||
+    x.magnet || x.link || x.Link || ''
   ).match(/urn:btih:([a-f0-9]{40})/i);
   return m ? m[1].toLowerCase() : '';
 }
 function search(host, q) {
   var url = host +
     '/api/v2.0/indexers/all/results?Query=' +
-    encodeURIComponent(q) + '&Category=2000,5000';
+    encodeURIComponent(q) +
+    '&Category=2000,5000';
   return req(url).then(function (d) {
-    var a = Array.isArray(d) ? d : (d.Results || d.results || []);
+    var a = Array.isArray(d)
+      ? d
+      : (d.Results || d.results || []);
     return a.map(function (x) {
       return {
-        title: x.Title || x.title || x.Name || x.name || 'Без названия',
+        title: x.Title || x.title ||
+          x.Name || x.name || 'Без названия',
         hash: hashOf(x),
         size: x.Size || x.size || 0,
         seeders: x.Seeders || x.seeders || 0,
@@ -65,56 +82,19 @@ function search(host, q) {
     });
   });
 }
-function cached(hash, access) {
-  return req(RD + 'torrents/instantAvailability/' + hash, access)
-    .then(function (d) {
-      var e = d[hash] || d[hash.toUpperCase()] || d[hash.toLowerCase()];
-      if (!e) {
-        return {
-          ok: false,
-          reason: 'В ответе RD нет ключа с hash',
-          responseKeys: Object.keys(d || {}).slice(0, 10).join(', ')
-        };
-      }
-      if (!e.rd) {
-        return {
-          ok: false,
-          reason: 'В ответе RD нет поля rd',
-          responseKeys: Object.keys(e).join(', ')
-        };
-      }
-      var slots = Array.isArray(e.rd) ? e.rd : [e.rd];
-      // Сохраняем структуру ответа для диагностики.
-      var rdKeys = [];
-      var yes = slots.some(function (slot) {
-        if (!slot || typeof slot !== 'object') return false;
-        rdKeys = rdKeys.concat(Object.keys(slot));
-        return Object.keys(slot).some(function (k) {
-          var v = slot[k];
-          if (Array.isArray(v)) return v.length > 0;
-          if (typeof v === 'number') return v > 0;
-          return !!v && typeof v === 'object' &&
-            Object.keys(v).length > 0;
-        });
-      });
-      return {
-        ok: yes,
-        reason: yes ? '' : 'Поле rd есть, но файлы не распознаны',
-        entryKeys: Object.keys(e).join(', '),
-        rdKeys: rdKeys.slice(0, 20).join(', ')
-      };
-    })
-    .catch(function (err) {
-      return {
-        ok: false,
-        error: true,
-        reason: (err.status ? 'HTTP ' + err.status + ': ' : '') +
-          (err.message || String(err))
-      };
-    });
+// ВАЖНО:
+// torrents/instantAvailability отключён со стороны RD.
+// Не делаем запросы к этому endpoint и не выдаём
+// ошибку API за отсутствие кэша.
+function cached() {
+  return Promise.resolve({
+    available: null,
+    unsupported: true,
+    reason: 'Автоматическая проверка кэша RD через instantAvailability недоступна'
+  });
 }
 function esc(s) {
-  return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+  return String(s == null ? '' : s).replace(/[&<>\"]/g, function (c) {
     return {
       '&': '&amp;',
       '<': '&lt;',
@@ -152,10 +132,16 @@ function openSearch(query) {
     '<div style="max-width:950px;margin:auto">' +
       '<div style="display:flex;justify-content:space-between;' +
       'align-items:center;gap:12px">' +
-        '<h2>Real-Debrid — кэш</h2>' +
+        '<h2>Real-Debrid — поиск раздач</h2>' +
         '<button id="rd-close">Закрыть</button>' +
       '</div>' +
       '<p id="rd-status">Ищем: ' + esc(query) + '</p>' +
+      '<div style="padding:12px;background:#333;border-radius:8px;' +
+      'line-height:1.5">' +
+        'Проверка кэша RD временно недоступна: ' +
+        'старый API endpoint отключён. Результаты поиска ' +
+        'не означают, что раздача есть или отсутствует в кэше.' +
+      '</div>' +
       '<div id="rd-results"></div>' +
     '</div>';
   document.body.appendChild(screen);
@@ -185,50 +171,23 @@ function openSearch(query) {
         }
       });
     });
-    screen.querySelector('#rd-status').textContent =
-      'Найдено релизов: ' + all.length +
-      '. Проверяем первые 60 через RD…';
-    return Promise.all(all.slice(0, 60).map(function (item) {
-      return cached(item.hash, access).then(function (result) {
-        return { item: item, result: result };
-      });
-    })).then(function (checks) {
-      return { total: all.length, checks: checks };
-    });
+    return {
+      total: all.length,
+      items: all
+    };
   }).then(function (data) {
     if (!screen.isConnected || !data) return;
-    var checks = data.checks;
-    var results = checks.filter(function (x) {
-      return x.result.ok;
-    }).map(function (x) {
-      return x.item;
-    });
-    var errors = checks.filter(function (x) {
-      return x.result.error;
-    });
-    var noHash = checks.filter(function (x) {
-      return !x.result.ok &&
-        !x.result.error &&
-        x.result.reason === 'В ответе RD нет ключа с hash';
-    }).length;
-    var noFiles = checks.filter(function (x) {
-      return !x.result.ok &&
-        !x.result.error &&
-        x.result.reason !== 'В ответе RD нет ключа с hash';
-    }).length;
     var status = screen.querySelector('#rd-status');
     var box = screen.querySelector('#rd-results');
     status.textContent =
-      'Найдено: ' + data.total +
-      ' · Проверено RD: ' + checks.length +
-      ' · Кэш: ' + results.length +
-      ' · Ошибки API: ' + errors.length;
+      'Найдено релизов: ' + data.total +
+      ' · Кэш RD: не проверен';
     var details = document.createElement('details');
     details.style.cssText =
       'margin:14px 0;padding:12px;background:#292929;' +
       'border-radius:8px;line-height:1.5';
     var summary = document.createElement('summary');
-    summary.textContent = 'Диагностика — нажми, чтобы раскрыть';
+    summary.textContent = 'Диагностика';
     details.appendChild(summary);
     var pre = document.createElement('pre');
     pre.style.cssText =
@@ -237,44 +196,26 @@ function openSearch(query) {
     pre.textContent =
       'Результаты парсеров:\n' +
       PARSERS.map(function (p) {
-        return p + ': ' + (parserCounts[p] || 0) + ' релизов';
+        return p + ': ' + (parserCounts[p] || 0) +
+          ' релизов';
       }).join('\n') +
       '\n\nПроверка Real-Debrid:\n' +
-      'Всего найдено: ' + data.total + '\n' +
-      'Проверено (максимум 60): ' + checks.length + '\n' +
-      'Кэш распознан: ' + results.length + '\n' +
-      'Ответ без ключа hash: ' + noHash + '\n' +
-      'Ответ без распознанных файлов: ' + noFiles + '\n' +
-      'Ошибки запросов RD: ' + errors.length +
-      (errors.length
-        ? '\nПримеры ошибок:\n' +
-          errors.slice(0, 5).map(function (x) {
-            return x.result.reason;
-          }).join('\n')
-        : '') +
-      (noFiles
-        ? '\n\nПримеры структуры ответа RD:\n' +
-          checks.filter(function (x) {
-            return !x.result.ok && !x.result.error;
-          }).slice(0, 3).map(function (x) {
-            return x.result.reason +
-              (x.result.entryKeys ? '; ключи: ' + x.result.entryKeys : '') +
-              (x.result.rdKeys ? '; ключи rd: ' + x.result.rdKeys : '');
-          }).join('\n')
-        : '') +
+      'Статус: не проверено.\n' +
+      'Причина: endpoint instantAvailability отключён.\n' +
+      'Запросы проверки кэша не выполнялись.' +
       (parserErrors.length
         ? '\n\nОшибки парсеров:\n' + parserErrors.join('\n')
         : '');
     details.appendChild(pre);
     box.appendChild(details);
-    if (!results.length) {
+    if (!data.items.length) {
       var empty = document.createElement('p');
       empty.textContent =
-        'Кэш не подтверждён. Раскрой блок «Диагностика» выше — там причина.';
+        'Раздачи не найдены. Проверь название или доступность парсера.';
       box.appendChild(empty);
       return;
     }
-    results.forEach(function (x) {
+    data.items.forEach(function (x) {
       var card = document.createElement('div');
       card.style.cssText =
         'padding:14px;margin:10px 0;background:#303030;' +
@@ -284,11 +225,14 @@ function openSearch(query) {
       if (x.seeders) meta.push('Сиды: ' + x.seeders);
       if (x.tracker) meta.push(x.tracker);
       card.innerHTML =
-        '<div style="font-weight:600">⚡ ' + esc(x.title) + '</div>' +
+        '<div style="font-weight:600">⚡ ' +
+        esc(x.title) + '</div>' +
         (meta.length
           ? '<div style="opacity:.75;font-size:.9em">' +
             meta.map(esc).join(' · ') + '</div>'
-          : '');
+          : '') +
+        '<div style="margin-top:6px;color:#ffc766;font-size:.9em">' +
+        'Кэш RD: не проверен</div>';
       box.appendChild(card);
     });
   }).catch(function (err) {
@@ -299,14 +243,17 @@ function openSearch(query) {
   });
 }
 function addButton(e) {
-  if (!e || e.type !== 'complite' || !e.data || !e.data.movie) return;
-  var root = e.object && e.object.activity && e.object.activity.render
-    ? e.object.activity.render()
-    : null;
+  if (!e || e.type !== 'complite' ||
+      !e.data || !e.data.movie) return;
+  var root = e.object && e.object.activity &&
+    e.object.activity.render
+      ? e.object.activity.render()
+      : null;
   if (!root || !root.length || !window.jQuery ||
       root.find('.view--realdebrid').length) return;
   var movie = e.data.movie;
-  var title = movie.title || movie.name || movie.original_title || '';
+  var title = movie.title || movie.name ||
+    movie.original_title || '';
   if (!title) return;
   var button = window.jQuery(
     '<div class="full-start__button selector view--realdebrid">' +
@@ -328,7 +275,8 @@ function addButton(e) {
   }
 }
 function boot() {
-  if (!window.Lampa || !Lampa.Listener || window.__rd_card_listener) return;
+  if (!window.Lampa || !Lampa.Listener ||
+      window.__rd_card_listener) return;
   window.__rd_card_listener = true;
   Lampa.Listener.follow('full', addButton);
 }
