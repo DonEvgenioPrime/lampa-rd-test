@@ -5,13 +5,10 @@ window.__rd_card_button_search = true;
 var PROXY = 'https://lampa-rd-proxy.evgeniy4450.workers.dev/';
 var RD = 'https://api.real-debrid.com/rest/1.0/';
 var STORE = 'rd_bridge_oauth_v2';
-// Используем только работающий источник.
 var PARSERS = ['https://jr.maxvol.pro'];
 function token() {
   try {
-    return JSON.parse(
-      localStorage.getItem(STORE) || '{}'
-    ).access_token || '';
+    return JSON.parse(localStorage.getItem(STORE) || '{}').access_token || '';
   } catch (e) {
     return '';
   }
@@ -59,8 +56,7 @@ function req(url, access, options) {
 function postForm(url, access, values) {
   var body = new URLSearchParams();
   Object.keys(values).forEach(function (key) {
-    if (values[key] !== undefined &&
-        values[key] !== null) {
+    if (values[key] !== undefined && values[key] !== null) {
       body.set(key, String(values[key]));
     }
   });
@@ -98,16 +94,13 @@ function magnetOf(item) {
   ];
   for (var i = 0; i < candidates.length; i++) {
     var value = String(candidates[i] || '').trim();
-    if (/^magnet:\?/i.test(value) &&
-        /urn:btih:/i.test(value)) {
+    if (/^magnet:\?/i.test(value) && /urn:btih:/i.test(value)) {
       return value;
     }
   }
-  if (!item.hash ||
-      !/^[a-f0-9]{40}$/i.test(item.hash)) {
+  if (!item.hash || !/^[a-f0-9]{40}$/i.test(item.hash)) {
     return '';
   }
-  // Если парсер дал только hash, формируем magnet URI.
   return 'magnet:?xt=urn:btih:' +
     item.hash +
     '&dn=' + encodeURIComponent(item.title || 'Torrent');
@@ -123,8 +116,7 @@ function search(host, q) {
       : (data.Results || data.results || []);
     return list.map(function (x) {
       var item = {
-        title: x.Title || x.title ||
-          x.Name || x.name || 'Без названия',
+        title: x.Title || x.title || x.Name || x.name || 'Без названия',
         hash: hashOf(x),
         size: x.Size || x.size || 0,
         seeders: x.Seeders || x.seeders || 0,
@@ -139,7 +131,7 @@ function search(host, q) {
   });
 }
 function esc(s) {
-  return String(s == null ? '' : s).replace(/[&<>\"]/g, function (c) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
     return {
       '&': '&amp;',
       '<': '&lt;',
@@ -174,6 +166,13 @@ function statusText(status) {
   };
   return labels[status] || ('Статус RD: ' + (status || 'неизвестен'));
 }
+/*
+ * Создаёт задачу, автоматически выбирает все файлы
+ * и запрашивает итоговый статус.
+ *
+ * ВАЖНО: если задача создана, но следующий запрос завершился
+ * ошибкой, повторно addMagnet не вызываем.
+ */
 function testOne(item, button, resultNode) {
   var access = token();
   if (!access) {
@@ -182,64 +181,77 @@ function testOne(item, button, resultNode) {
   }
   var magnet = item.magnet || magnetOf(item);
   if (!magnet) {
-    resultNode.textContent =
-      'Не удалось получить magnet-ссылку или hash.';
+    resultNode.textContent = 'Не удалось получить magnet-ссылку или hash.';
     return;
   }
   var confirmed = window.confirm(
-    'Тест одной раздачи в Real-Debrid\n\n' +
+    'Добавить раздачу в Real-Debrid?\n\n' +
     item.title + '\n\n' +
-    'Продолжение отправит магнит в твой аккаунт RD ' +
-    'и может создать торрент-задачу.\n' +
-    'Файлы автоматически выбирать и скачивать этот плагин не будет.\n\n' +
+    'Плагин отправит магнит в твой аккаунт RD, ' +
+    'а затем попробует автоматически выбрать все файлы.\n\n' +
     'Продолжить?'
   );
   if (!confirmed) return;
   button.disabled = true;
   button.textContent = 'Отправляем в RD…';
-  resultNode.textContent = 'Создаём тестовую задачу…';
+  resultNode.textContent = 'Создаём задачу…';
   postForm(RD + 'torrents/addMagnet', access, {
     magnet: magnet
   }).then(function (response) {
     if (!response || !response.id) {
       throw new Error(
-        'RD не вернул ID задачи. Ответ: ' +
-        JSON.stringify(response)
+        'RD не вернул ID задачи. Ответ: ' + JSON.stringify(response)
       );
     }
     var id = response.id;
     resultNode.textContent =
-      'Магнит принят RD. Проверяем статус задачи…';
-    return req(
-      RD + 'torrents/info/' + encodeURIComponent(id),
-      access
-    ).then(function (info) {
+      'Задача создана: ' + id + '\nАвтоматически выбираем все файлы…';
+    // Ключевое изменение: выбрать все файлы задачи.
+    return postForm(
+      RD + 'torrents/selectFiles/' + encodeURIComponent(id),
+      access,
+      { files: 'all' }
+    ).then(function () {
+      resultNode.textContent =
+        'Все файлы переданы на выбор.\nПроверяем статус RD…';
+      return req(
+        RD + 'torrents/info/' + encodeURIComponent(id),
+        access
+      );
+    }).then(function (info) {
       var status = statusText(info.status);
       resultNode.textContent =
-        status + '\n' +
-        'ID задачи RD: ' + id +
+        status + '\nID задачи RD: ' + id +
         (info.status === 'waiting_files_selection'
-          ? '\nRD ждёт выбора файлов. Плагин ничего не выбирал.'
+          ? '\nRD всё ещё ожидает выбора файлов. Возможно, Worker не передал запрос выбора.'
           : '') +
         (info.status === 'downloaded'
-          ? '\nЭто подтверждает состояние задачи, но само по себе ' +
-            'не является универсальной проверкой кэша.'
-          : '');
-      button.textContent = 'Тест отправлен';
+          ? '\nRD сообщает, что задача загружена.'
+          : '') +
+        '\n\nПроверка кэша RD отдельно не выполнялась.';
+      button.textContent = 'Задача создана';
+      button.disabled = true;
+    }).catch(function (err) {
+      // Задача уже могла быть создана: не повторяем addMagnet.
+      resultNode.textContent =
+        'Задача RD создана: ' + id +
+        '\nОшибка автоматического выбора или проверки: ' + err.message +
+        '\n\nПроверь эту задачу в Real-Debrid вручную. ' +
+        'Не нажимай добавление повторно, чтобы не создать дубликат.';
+      button.textContent = 'Задача создана';
       button.disabled = true;
     });
   }).catch(function (err) {
     resultNode.textContent =
-      'Ошибка теста: ' + err.message +
-      '\nЕсли задача уже была создана, проверь список торрентов RD, ' +
-      'чтобы не отправлять тот же магнит повторно.';
-    button.textContent = 'Повторить тест';
-    button.disabled = false;
+      'Ошибка добавления: ' + err.message +
+      '\nЕсли задача появилась в RD, не отправляй магнит повторно, ' +
+      'пока не проверишь список задач.';
+    button.textContent = 'Ошибка добавления';
+    button.disabled = true;
   });
 }
 function openSearch(query) {
-  var access = token();
-  if (!access) {
+  if (!token()) {
     note('Сначала подключи Real-Debrid в настройках.');
     return;
   }
@@ -261,10 +273,8 @@ function openSearch(query) {
       '<p id="rd-status">Ищем: ' + esc(query) + '</p>' +
       '<div style="padding:12px;background:#333;border-radius:8px;' +
       'line-height:1.5;margin-bottom:14px">' +
-        'Старый endpoint автоматической проверки кэша отключён. ' +
-        'Кнопка теста отправляет только выбранный магнит в RD ' +
-        'после подтверждения. Это создаёт задачу, но не гарантирует, ' +
-        'что раздача уже находится в кэше.' +
+        'Кэш RD автоматически не проверяется. При тесте плагин ' +
+        'добавит выбранный магнит и попробует выбрать все файлы.' +
       '</div>' +
       '<div id="rd-results"></div>' +
     '</div>';
@@ -295,17 +305,13 @@ function openSearch(query) {
         }
       });
     });
-    return {
-      total: all.length,
-      items: all
-    };
+    return { total: all.length, items: all };
   }).then(function (data) {
     if (!screen.isConnected || !data) return;
     var status = screen.querySelector('#rd-status');
     var box = screen.querySelector('#rd-results');
     status.textContent =
-      'Найдено релизов: ' + data.total +
-      ' · Кэш RD: не проверен';
+      'Найдено релизов: ' + data.total + ' · Кэш RD: не проверен';
     var details = document.createElement('details');
     details.style.cssText =
       'margin:14px 0;padding:12px;background:#292929;' +
@@ -358,11 +364,10 @@ function openSearch(query) {
       cacheLabel.textContent = 'Кэш RD: не проверен';
       card.appendChild(cacheLabel);
       var button = document.createElement('button');
-      button.textContent = 'Тест одной раздачи в RD';
+      button.textContent = 'Добавить и выбрать файлы';
       button.style.cssText =
         'margin-top:10px;padding:10px 14px;border:0;' +
-        'border-radius:6px;background:#7a5cff;color:#fff;' +
-        'cursor:pointer';
+        'border-radius:6px;background:#7a5cff;color:#fff;cursor:pointer';
       var result = document.createElement('div');
       result.style.cssText =
         'margin-top:8px;white-space:pre-wrap;overflow-wrap:anywhere;' +
@@ -382,8 +387,7 @@ function openSearch(query) {
   });
 }
 function addButton(e) {
-  if (!e || e.type !== 'complite' ||
-      !e.data || !e.data.movie) return;
+  if (!e || e.type !== 'complite' || !e.data || !e.data.movie) return;
   var root = e.object && e.object.activity &&
     e.object.activity.render
       ? e.object.activity.render()
@@ -391,8 +395,7 @@ function addButton(e) {
   if (!root || !root.length || !window.jQuery ||
       root.find('.view--realdebrid').length) return;
   var movie = e.data.movie;
-  var title = movie.title || movie.name ||
-    movie.original_title || '';
+  var title = movie.title || movie.name || movie.original_title || '';
   if (!title) return;
   var button = window.jQuery(
     '<div class="full-start__button selector view--realdebrid">' +
