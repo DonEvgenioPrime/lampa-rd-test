@@ -3,9 +3,9 @@
 if (window.__rd_card_button_search) return;
 window.__rd_card_button_search = true;
 var PROXY = 'https://lampa-rd-proxy.evgeniy4450.workers.dev/';
+var RD = 'https://api.real-debrid.com/rest/1.0/';
 var STORE = 'rd_bridge_oauth_v2';
-// Оставляем только проверенный источник.
-// jacred.xyz сейчас возвращает ошибку и не используется.
+// Используем только работающий источник.
 var PARSERS = ['https://jr.maxvol.pro'];
 function token() {
   try {
@@ -21,29 +21,55 @@ function note(s) {
     Lampa.Noty.show(s);
   }
 }
-function req(url, access) {
-  var h = { Accept: 'application/json' };
-  if (access) h.Authorization = 'Bearer ' + access;
+function req(url, access, options) {
+  options = options || {};
+  var headers = Object.assign(
+    { Accept: 'application/json' },
+    options.headers || {}
+  );
+  if (access) headers.Authorization = 'Bearer ' + access;
   return fetch(
     PROXY + '?url=' + encodeURIComponent(url),
-    { headers: h }
+    {
+      method: options.method || 'GET',
+      headers: headers,
+      body: options.body
+    }
   ).then(function (r) {
     return r.text().then(function (t) {
-      var d;
+      var data;
       try {
-        d = t ? JSON.parse(t) : {};
+        data = t ? JSON.parse(t) : {};
       } catch (e) {
-        d = { message: t };
+        data = { message: t };
       }
       if (!r.ok) {
         var err = new Error(
-          d.error || d.message || ('HTTP ' + r.status)
+          'HTTP ' + r.status + ': ' +
+          (data.error_description || data.error ||
+           data.message || r.statusText || 'Ошибка')
         );
         err.status = r.status;
         throw err;
       }
-      return d;
+      return data;
     });
+  });
+}
+function postForm(url, access, values) {
+  var body = new URLSearchParams();
+  Object.keys(values).forEach(function (key) {
+    if (values[key] !== undefined &&
+        values[key] !== null) {
+      body.set(key, String(values[key]));
+    }
+  });
+  return req(url, access, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body: body.toString()
   });
 }
 function hashOf(x) {
@@ -58,17 +84,45 @@ function hashOf(x) {
   ).match(/urn:btih:([a-f0-9]{40})/i);
   return m ? m[1].toLowerCase() : '';
 }
+function magnetOf(item) {
+  var raw = item.raw || {};
+  var candidates = [
+    raw.MagnetUri,
+    raw.magnetUri,
+    raw.magnet,
+    raw.Magnet,
+    raw.link,
+    raw.Link,
+    raw.downloadUrl,
+    raw.DownloadUrl
+  ];
+  for (var i = 0; i < candidates.length; i++) {
+    var value = String(candidates[i] || '').trim();
+    if (/^magnet:\?/i.test(value) &&
+        /urn:btih:/i.test(value)) {
+      return value;
+    }
+  }
+  if (!item.hash ||
+      !/^[a-f0-9]{40}$/i.test(item.hash)) {
+    return '';
+  }
+  // Если парсер дал только hash, формируем magnet URI.
+  return 'magnet:?xt=urn:btih:' +
+    item.hash +
+    '&dn=' + encodeURIComponent(item.title || 'Torrent');
+}
 function search(host, q) {
   var url = host +
     '/api/v2.0/indexers/all/results?Query=' +
     encodeURIComponent(q) +
     '&Category=2000,5000';
-  return req(url).then(function (d) {
-    var a = Array.isArray(d)
-      ? d
-      : (d.Results || d.results || []);
-    return a.map(function (x) {
-      return {
+  return req(url).then(function (data) {
+    var list = Array.isArray(data)
+      ? data
+      : (data.Results || data.results || []);
+    return list.map(function (x) {
+      var item = {
         title: x.Title || x.title ||
           x.Name || x.name || 'Без названия',
         hash: hashOf(x),
@@ -77,20 +131,11 @@ function search(host, q) {
         tracker: x.Tracker || x.tracker || '',
         raw: x
       };
-    }).filter(function (x) {
-      return x.hash;
+      item.magnet = magnetOf(item);
+      return item;
+    }).filter(function (item) {
+      return !!item.hash;
     });
-  });
-}
-// ВАЖНО:
-// torrents/instantAvailability отключён со стороны RD.
-// Не делаем запросы к этому endpoint и не выдаём
-// ошибку API за отсутствие кэша.
-function cached() {
-  return Promise.resolve({
-    available: null,
-    unsupported: true,
-    reason: 'Автоматическая проверка кэша RD через instantAvailability недоступна'
   });
 }
 function esc(s) {
@@ -113,6 +158,84 @@ function formatSize(n) {
     i++;
   }
   return n.toFixed(i > 1 ? 1 : 0) + ' ' + units[i];
+}
+function statusText(status) {
+  var labels = {
+    magnet_conversion: 'RD обрабатывает магнит',
+    waiting_files_selection: 'Ожидается выбор файлов',
+    queued: 'Задача в очереди',
+    downloading: 'RD загружает раздачу',
+    downloaded: 'RD сообщает: загружено',
+    error: 'RD сообщил об ошибке',
+    virus: 'RD пометил раздачу как опасную',
+    compressing: 'RD обрабатывает файлы',
+    uploading: 'RD обрабатывает файлы',
+    dead: 'Раздача недоступна'
+  };
+  return labels[status] || ('Статус RD: ' + (status || 'неизвестен'));
+}
+function testOne(item, button, resultNode) {
+  var access = token();
+  if (!access) {
+    note('Сначала подключи Real-Debrid в настройках.');
+    return;
+  }
+  var magnet = item.magnet || magnetOf(item);
+  if (!magnet) {
+    resultNode.textContent =
+      'Не удалось получить magnet-ссылку или hash.';
+    return;
+  }
+  var confirmed = window.confirm(
+    'Тест одной раздачи в Real-Debrid\n\n' +
+    item.title + '\n\n' +
+    'Продолжение отправит магнит в твой аккаунт RD ' +
+    'и может создать торрент-задачу.\n' +
+    'Файлы автоматически выбирать и скачивать этот плагин не будет.\n\n' +
+    'Продолжить?'
+  );
+  if (!confirmed) return;
+  button.disabled = true;
+  button.textContent = 'Отправляем в RD…';
+  resultNode.textContent = 'Создаём тестовую задачу…';
+  postForm(RD + 'torrents/addMagnet', access, {
+    magnet: magnet
+  }).then(function (response) {
+    if (!response || !response.id) {
+      throw new Error(
+        'RD не вернул ID задачи. Ответ: ' +
+        JSON.stringify(response)
+      );
+    }
+    var id = response.id;
+    resultNode.textContent =
+      'Магнит принят RD. Проверяем статус задачи…';
+    return req(
+      RD + 'torrents/info/' + encodeURIComponent(id),
+      access
+    ).then(function (info) {
+      var status = statusText(info.status);
+      resultNode.textContent =
+        status + '\n' +
+        'ID задачи RD: ' + id +
+        (info.status === 'waiting_files_selection'
+          ? '\nRD ждёт выбора файлов. Плагин ничего не выбирал.'
+          : '') +
+        (info.status === 'downloaded'
+          ? '\nЭто подтверждает состояние задачи, но само по себе ' +
+            'не является универсальной проверкой кэша.'
+          : '');
+      button.textContent = 'Тест отправлен';
+      button.disabled = true;
+    });
+  }).catch(function (err) {
+    resultNode.textContent =
+      'Ошибка теста: ' + err.message +
+      '\nЕсли задача уже была создана, проверь список торрентов RD, ' +
+      'чтобы не отправлять тот же магнит повторно.';
+    button.textContent = 'Повторить тест';
+    button.disabled = false;
+  });
 }
 function openSearch(query) {
   var access = token();
@@ -137,10 +260,11 @@ function openSearch(query) {
       '</div>' +
       '<p id="rd-status">Ищем: ' + esc(query) + '</p>' +
       '<div style="padding:12px;background:#333;border-radius:8px;' +
-      'line-height:1.5">' +
-        'Проверка кэша RD временно недоступна: ' +
-        'старый API endpoint отключён. Результаты поиска ' +
-        'не означают, что раздача есть или отсутствует в кэше.' +
+      'line-height:1.5;margin-bottom:14px">' +
+        'Старый endpoint автоматической проверки кэша отключён. ' +
+        'Кнопка теста отправляет только выбранный магнит в RD ' +
+        'после подтверждения. Это создаёт задачу, но не гарантирует, ' +
+        'что раздача уже находится в кэше.' +
       '</div>' +
       '<div id="rd-results"></div>' +
     '</div>';
@@ -196,13 +320,9 @@ function openSearch(query) {
     pre.textContent =
       'Результаты парсеров:\n' +
       PARSERS.map(function (p) {
-        return p + ': ' + (parserCounts[p] || 0) +
-          ' релизов';
+        return p + ': ' + (parserCounts[p] || 0) + ' релизов';
       }).join('\n') +
-      '\n\nПроверка Real-Debrid:\n' +
-      'Статус: не проверено.\n' +
-      'Причина: endpoint instantAvailability отключён.\n' +
-      'Запросы проверки кэша не выполнялись.' +
+      '\n\nПроверка кэша RD: не выполнялась.' +
       (parserErrors.length
         ? '\n\nОшибки парсеров:\n' + parserErrors.join('\n')
         : '');
@@ -215,24 +335,43 @@ function openSearch(query) {
       box.appendChild(empty);
       return;
     }
-    data.items.forEach(function (x) {
+    data.items.forEach(function (item) {
       var card = document.createElement('div');
       card.style.cssText =
         'padding:14px;margin:10px 0;background:#303030;' +
-        'border-radius:8px;line-height:1.5';
-      var meta = [];
-      if (x.size) meta.push(formatSize(x.size));
-      if (x.seeders) meta.push('Сиды: ' + x.seeders);
-      if (x.tracker) meta.push(x.tracker);
-      card.innerHTML =
-        '<div style="font-weight:600">⚡ ' +
-        esc(x.title) + '</div>' +
-        (meta.length
-          ? '<div style="opacity:.75;font-size:.9em">' +
-            meta.map(esc).join(' · ') + '</div>'
-          : '') +
-        '<div style="margin-top:6px;color:#ffc766;font-size:.9em">' +
-        'Кэш RD: не проверен</div>';
+        'border-radius:8px;line-height:1.5;overflow-wrap:anywhere';
+      var title = document.createElement('div');
+      title.style.cssText = 'font-weight:600;margin-bottom:6px';
+      title.textContent = item.title;
+      card.appendChild(title);
+      var meta = document.createElement('div');
+      meta.style.cssText = 'opacity:.75;font-size:.9em';
+      var bits = [];
+      if (item.size) bits.push(formatSize(item.size));
+      if (item.seeders) bits.push('Сиды: ' + item.seeders);
+      if (item.tracker) bits.push(item.tracker);
+      meta.textContent = bits.join(' · ');
+      card.appendChild(meta);
+      var cacheLabel = document.createElement('div');
+      cacheLabel.style.cssText =
+        'margin-top:6px;color:#ffc766;font-size:.9em';
+      cacheLabel.textContent = 'Кэш RD: не проверен';
+      card.appendChild(cacheLabel);
+      var button = document.createElement('button');
+      button.textContent = 'Тест одной раздачи в RD';
+      button.style.cssText =
+        'margin-top:10px;padding:10px 14px;border:0;' +
+        'border-radius:6px;background:#7a5cff;color:#fff;' +
+        'cursor:pointer';
+      var result = document.createElement('div');
+      result.style.cssText =
+        'margin-top:8px;white-space:pre-wrap;overflow-wrap:anywhere;' +
+        'font-size:.9em';
+      button.onclick = function () {
+        testOne(item, button, result);
+      };
+      card.appendChild(button);
+      card.appendChild(result);
       box.appendChild(card);
     });
   }).catch(function (err) {
