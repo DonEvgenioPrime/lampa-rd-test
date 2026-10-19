@@ -8,6 +8,14 @@ var PROXY = 'https://lampa-rd-proxy.evgeniy4450.workers.dev/';
 var RD = 'https://api.real-debrid.com/rest/1.0/';
 var STORE = 'rd_bridge_oauth_v2';
 var PARSERS = ['https://jr.maxvol.pro'];
+var SORT_STORE = 'rd_card_button_sort_v1';
+
+var SORT_OPTIONS = [
+  { value: 'seeders', label: 'По сидам (убыв.)' },
+  { value: 'size_desc', label: 'По размеру (убыв.)' },
+  { value: 'size_asc', label: 'По размеру (возр.)' },
+  { value: 'date', label: 'По дате добавления' }
+];
 
 function token() {
   try {
@@ -15,6 +23,24 @@ function token() {
   } catch (e) {
     return '';
   }
+}
+
+function getSortMode() {
+  try {
+    var value = localStorage.getItem(SORT_STORE) || 'size_asc';
+
+    return SORT_OPTIONS.some(function (option) {
+      return option.value === value;
+    }) ? value : 'size_asc';
+  } catch (e) {
+    return 'size_asc';
+  }
+}
+
+function setSortMode(value) {
+  try {
+    localStorage.setItem(SORT_STORE, value);
+  } catch (e) {}
 }
 
 function note(s) {
@@ -163,11 +189,6 @@ function magnetOf(item) {
     '&dn=' + encodeURIComponent(item.title || 'Torrent');
 }
 
-/*
- * Диагностика magnet:
- * показывает название карточки, dn и hash.
- * Ничего не меняет в самой magnet-ссылке.
- */
 function magnetDiagnostic(item) {
   var magnet = item.magnet || magnetOf(item);
   var match = String(magnet || '').match(/[?&]dn=([^&]*)/i);
@@ -189,6 +210,35 @@ function magnetDiagnostic(item) {
   };
 }
 
+function firstValue(obj, names) {
+  for (var i = 0; i < names.length; i++) {
+    var value = obj && obj[names[i]];
+
+    if (value !== undefined && value !== null && value !== '') {
+      return value;
+    }
+  }
+
+  return '';
+}
+
+function parseDateValue(value) {
+  if (value === undefined || value === null || value === '') return 0;
+
+  if (typeof value === 'number' && isFinite(value)) {
+    return value < 100000000000 ? value * 1000 : value;
+  }
+
+  var text = String(value).trim();
+
+  if (/^\d{10}$/.test(text)) return Number(text) * 1000;
+  if (/^\d{13}$/.test(text)) return Number(text);
+
+  var parsed = Date.parse(text);
+
+  return isNaN(parsed) ? 0 : parsed;
+}
+
 function search(host, q) {
   var url = host +
     '/api/v2.0/indexers/all/results?Query=' +
@@ -201,16 +251,35 @@ function search(host, q) {
       : (data.Results || data.results || []);
 
     return list.map(function (x) {
+      var rawSize = firstValue(x, ['Size', 'size', 'length']);
+
+      var rawSeeders = firstValue(x, [
+        'Seeders', 'seeders', 'Seeds', 'seeds'
+      ]);
+
+      var rawLeechers = firstValue(x, [
+        'Peers', 'peers', 'Leechers', 'leechers'
+      ]);
+
+      var rawDate = firstValue(x, [
+        'PublishDate', 'publishDate', 'publish_date',
+        'Date', 'date', 'Added', 'added',
+        'Created', 'created', 'CreationDate', 'creationDate'
+      ]);
+
       var item = {
         title: x.Title || x.title || x.Name || x.name || 'Без названия',
         hash: hashOf(x),
-        size: x.Size || x.size || 0,
-        seeders: x.Seeders || x.seeders || 0,
+        size: Number(rawSize) || 0,
+        seeders: Number(rawSeeders) || 0,
+        leechers: Number(rawLeechers) || 0,
         tracker: x.Tracker || x.tracker || '',
+        dateAdded: parseDateValue(rawDate),
         raw: x
       };
 
       item.magnet = magnetOf(item);
+
       return item;
     }).filter(function (item) {
       return !!item.hash;
@@ -218,9 +287,47 @@ function search(host, q) {
   });
 }
 
-/*
- * DMM: POST с IMDb ID и хэшами раздач.
- */
+/* Сортировка списка. */
+function sortItems(items, mode) {
+  var rows = items.slice();
+
+  rows.sort(function (a, b) {
+    if (mode === 'seeders') {
+      return (b.seeders - a.seeders) ||
+        (b.size - a.size) ||
+        a.title.localeCompare(b.title);
+    }
+
+    if (mode === 'size_desc') {
+      return (b.size - a.size) ||
+        (b.seeders - a.seeders) ||
+        a.title.localeCompare(b.title);
+    }
+
+    if (mode === 'size_asc') {
+      return (a.size - b.size) ||
+        (b.seeders - a.seeders) ||
+        a.title.localeCompare(b.title);
+    }
+
+    if (mode === 'date') {
+      if (a.dateAdded && b.dateAdded) {
+        return b.dateAdded - a.dateAdded;
+      }
+
+      if (a.dateAdded) return -1;
+      if (b.dateAdded) return 1;
+
+      return (b.seeders - a.seeders) ||
+        a.title.localeCompare(b.title);
+    }
+
+    return 0;
+  });
+
+  return rows;
+}
+
 function checkDMM(imdbId, hashes, access) {
   if (!imdbId) {
     return Promise.reject(
@@ -249,17 +356,12 @@ function checkDMM(imdbId, hashes, access) {
 function findHashResult(data, hash) {
   var wanted = String(hash || '').toLowerCase();
 
-  if (!data || !Array.isArray(data.available)) {
-    return null;
-  }
+  if (!data || !Array.isArray(data.available)) return null;
 
   for (var i = 0; i < data.available.length; i++) {
     var item = data.available[i];
 
-    if (
-      item &&
-      String(item.hash || '').toLowerCase() === wanted
-    ) {
+    if (item && String(item.hash || '').toLowerCase() === wanted) {
       return item;
     }
   }
@@ -290,7 +392,6 @@ function esc(s) {
 
 function formatSize(n) {
   n = Number(n);
-
   if (!n) return '';
 
   var units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -345,6 +446,7 @@ function getRDUserId(screen, button) {
 
     var id = String(data.id);
     var old = screen.querySelector('#rd-user-id-result');
+
     if (old) old.remove();
 
     var result = document.createElement('div');
@@ -392,10 +494,15 @@ function runCacheCheck(items, imdbId, access, screen) {
   if (!imdbId) {
     status.textContent =
       'Кэш не проверен: IMDb ID не найден в данных фильма.';
+
     items.forEach(function (item) {
-      var node = screen.querySelector('[data-cache-hash="' + item.hash + '"]');
+      var node = screen.querySelector(
+        '[data-cache-hash="' + item.hash + '"]'
+      );
+
       if (node) node.textContent = 'Не найден IMDb ID фильма';
     });
+
     return;
   }
 
@@ -405,6 +512,7 @@ function runCacheCheck(items, imdbId, access, screen) {
   }
 
   var batches = [];
+
   for (var i = 0; i < items.length; i += 100) {
     batches.push(items.slice(i, i + 100));
   }
@@ -421,7 +529,9 @@ function runCacheCheck(items, imdbId, access, screen) {
     return chain.then(function () {
       return checkDMM(
         imdbId,
-        batch.map(function (item) { return item.hash; }),
+        batch.map(function (item) {
+          return item.hash;
+        }),
         access
       ).then(function (data) {
         if (!screen.isConnected) return;
@@ -438,12 +548,15 @@ function runCacheCheck(items, imdbId, access, screen) {
           var result = findHashResult(data, item.hash);
           var state = classifyCache(result);
 
+          item.cacheState = state;
+
           if (!node) return;
 
           if (state === 'cached') {
             node.textContent =
               '⚡ DMM: есть доступные файлы (' +
               result.files.length + ')';
+
             node.style.color = '#72e6a2';
             cachedCount++;
           } else if (state === 'not-confirmed') {
@@ -453,6 +566,7 @@ function runCacheCheck(items, imdbId, access, screen) {
           } else {
             node.textContent =
               'DMM вернул хэш, но список файлов неизвестен';
+
             node.style.color = '#ffc766';
             unknownCount++;
           }
@@ -462,6 +576,8 @@ function runCacheCheck(items, imdbId, access, screen) {
       errors.push(err.message);
 
       batch.forEach(function (item) {
+        item.cacheState = 'error';
+
         var node = screen.querySelector(
           '[data-cache-hash="' + item.hash + '"]'
         );
@@ -482,6 +598,7 @@ function runCacheCheck(items, imdbId, access, screen) {
       (errors.length ? ' · ошибок: ' + errors.length : '');
 
     var diag = screen.querySelector('#rd-dmm-diagnostic');
+
     if (diag) {
       diag.textContent =
         'IMDb ID: ' + imdbId +
@@ -565,6 +682,199 @@ function testOne(item, button, resultNode) {
   });
 }
 
+/* Меню сортировки. */
+function openSortMenu(screen) {
+  var old = screen.querySelector('#rd-sort-menu');
+
+  if (old) {
+    old.remove();
+    return;
+  }
+
+  var menu = document.createElement('div');
+  menu.id = 'rd-sort-menu';
+  menu.style.cssText =
+    'position:fixed;z-index:1000002;inset:0;background:rgba(0,0,0,.7);' +
+    'display:flex;align-items:flex-end;justify-content:center;padding:12px;box-sizing:border-box';
+
+  var panel = document.createElement('div');
+  panel.style.cssText =
+    'width:100%;max-width:600px;background:#252525;color:#fff;' +
+    'border-radius:18px;padding:18px 18px 24px;box-sizing:border-box';
+
+  var heading = document.createElement('div');
+  heading.textContent = 'Сортировать';
+  heading.style.cssText = 'font-size:26px;margin:4px 4px 18px';
+  panel.appendChild(heading);
+
+  var current = getSortMode();
+
+  SORT_OPTIONS.forEach(function (option) {
+    var row = document.createElement('button');
+    row.type = 'button';
+    row.style.cssText =
+      'display:flex;width:100%;align-items:center;justify-content:space-between;' +
+      'gap:12px;padding:17px 6px;border:0;background:transparent;color:#fff;' +
+      'font-size:17px;text-align:left;cursor:pointer';
+
+    var label = document.createElement('span');
+    label.textContent = option.label;
+    row.appendChild(label);
+
+    var check = document.createElement('span');
+    check.textContent = option.value === current ? '✓' : '';
+    check.style.cssText = 'font-size:24px;min-width:24px;text-align:center';
+    row.appendChild(check);
+
+    row.onclick = function () {
+      setSortMode(option.value);
+      menu.remove();
+      renderCards(screen);
+    };
+
+    panel.appendChild(row);
+  });
+
+  menu.appendChild(panel);
+
+  menu.addEventListener('click', function (event) {
+    if (event.target === menu) menu.remove();
+  });
+
+  screen.appendChild(menu);
+}
+
+/* Перерисовываем карточки в новом порядке. Данные и статусы хранятся в item. */
+function renderCards(screen) {
+  var all = screen.__rdItems || [];
+  var box = screen.querySelector('#rd-results');
+
+  if (!box) return;
+
+  var diagnostics = box.querySelector('#rd-search-diagnostics');
+
+  box.innerHTML = '';
+
+  if (diagnostics) box.appendChild(diagnostics);
+
+  var mode = getSortMode();
+  var sorted = sortItems(all, mode);
+
+  var selected = SORT_OPTIONS.filter(function (option) {
+    return option.value === mode;
+  })[0];
+
+  var sortInfo = screen.querySelector('#rd-sort-current');
+
+  if (sortInfo && selected) {
+    sortInfo.textContent = selected.label;
+  }
+
+  sorted.forEach(function (item) {
+    var card = document.createElement('div');
+
+    card.style.cssText =
+      'padding:14px;margin:10px 0;background:#303030;' +
+      'border-radius:8px;line-height:1.5;overflow-wrap:anywhere';
+
+    var title = document.createElement('div');
+    title.style.cssText = 'font-weight:600;margin-bottom:6px';
+    title.textContent = item.title;
+    card.appendChild(title);
+
+    var meta = document.createElement('div');
+    meta.style.cssText = 'opacity:.75;font-size:.9em';
+
+    var bits = [];
+
+    if (item.size) bits.push(formatSize(item.size));
+
+    bits.push('Сиды: ' + item.seeders);
+
+    if (item.tracker) bits.push(item.tracker);
+
+    if (item.dateAdded) {
+      bits.push('Дата: ' + new Date(item.dateAdded).toLocaleDateString());
+    }
+
+    meta.textContent = bits.join(' · ');
+    card.appendChild(meta);
+
+    var diagDetails = document.createElement('details');
+
+    diagDetails.style.cssText =
+      'margin-top:10px;padding:10px;background:#242424;' +
+      'border-radius:6px;font-size:13px';
+
+    var diagSummary = document.createElement('summary');
+    diagSummary.textContent = 'Проверка magnet / имени dn';
+    diagDetails.appendChild(diagSummary);
+
+    var diagPre = document.createElement('pre');
+
+    diagPre.style.cssText =
+      'white-space:pre-wrap;overflow-wrap:anywhere;' +
+      'font:12px monospace;line-height:1.5';
+
+    var diag = magnetDiagnostic(item);
+
+    diagPre.textContent =
+      'Название карточки Lampa:\n' + diag.title +
+      '\n\nИмя dn в magnet:\n' + diag.dn +
+      '\n\nHash:\n' + diag.hash +
+      '\n\nMagnet найден: ' + (diag.magnetFound ? 'да' : 'нет');
+
+    diagDetails.appendChild(diagPre);
+    card.appendChild(diagDetails);
+
+    var cacheLabel = document.createElement('div');
+    cacheLabel.setAttribute('data-cache-hash', item.hash);
+    cacheLabel.style.cssText = 'margin-top:6px;font-size:.9em';
+
+    if (item.cacheState === 'cached') {
+      cacheLabel.textContent = '⚡ DMM: кэш подтверждён';
+      cacheLabel.style.color = '#72e6a2';
+    } else if (item.cacheState === 'unknown') {
+      cacheLabel.textContent =
+        'DMM вернул хэш, но список файлов неизвестен';
+      cacheLabel.style.color = '#ffc766';
+    } else if (item.cacheState === 'error') {
+      cacheLabel.textContent = 'Ошибка проверки DMM';
+      cacheLabel.style.color = '#ff8585';
+    } else if (item.cacheState === 'checking') {
+      cacheLabel.textContent = 'Проверяем DMM…';
+      cacheLabel.style.color = '#ffc766';
+    } else {
+      cacheLabel.textContent = 'Кэш DMM не подтверждён';
+      cacheLabel.style.color = '#ffc766';
+    }
+
+    card.appendChild(cacheLabel);
+
+    var button = document.createElement('button');
+    button.textContent = 'Добавить и выбрать файлы';
+
+    button.style.cssText =
+      'margin-top:10px;padding:10px 14px;border:0;' +
+      'border-radius:6px;background:#7a5cff;color:#fff;cursor:pointer';
+
+    var result = document.createElement('div');
+
+    result.style.cssText =
+      'margin-top:8px;white-space:pre-wrap;' +
+      'overflow-wrap:anywhere;font-size:.9em';
+
+    button.onclick = function () {
+      testOne(item, button, result);
+    };
+
+    card.appendChild(button);
+    card.appendChild(result);
+
+    box.appendChild(card);
+  });
+}
+
 function openSearch(query, movie) {
   var access = token();
 
@@ -575,10 +885,12 @@ function openSearch(query, movie) {
 
   var imdbId = getImdbId(movie);
   var old = document.getElementById('rd-card-search');
+
   if (old) old.remove();
 
   var screen = document.createElement('div');
   screen.id = 'rd-card-search';
+
   screen.style.cssText =
     'position:fixed;z-index:999999;inset:0;overflow:auto;' +
     'background:#171717;color:#fff;padding:20px;box-sizing:border-box;' +
@@ -594,6 +906,14 @@ function openSearch(query, movie) {
           '<button id="rd-close">Закрыть</button>' +
         '</div>' +
       '</div>' +
+      '<div style="display:flex;align-items:center;gap:10px;' +
+      'flex-wrap:wrap;margin:12px 0">' +
+        '<button id="rd-sort-button" style="padding:10px 14px;' +
+        'border:1px solid #666;border-radius:8px;background:#333;' +
+        'color:#fff;cursor:pointer">Сортировка</button>' +
+        '<span style="opacity:.8">Текущая: ' +
+        '<span id="rd-sort-current"></span></span>' +
+      '</div>' +
       '<p id="rd-status">Ищем: ' + esc(query) + '</p>' +
       '<div style="padding:12px;background:#333;border-radius:8px;' +
       'line-height:1.5;margin-bottom:14px">' +
@@ -604,7 +924,8 @@ function openSearch(query, movie) {
       '<div id="rd-results"></div>' +
       '<details style="margin-top:16px;padding:12px;background:#292929;border-radius:8px">' +
         '<summary>Ответ DMM / диагностика</summary>' +
-        '<pre id="rd-dmm-diagnostic" style="white-space:pre-wrap;overflow-wrap:anywhere;font:12px monospace"></pre>' +
+        '<pre id="rd-dmm-diagnostic" style="white-space:pre-wrap;' +
+        'overflow-wrap:anywhere;font:12px monospace"></pre>' +
       '</details>' +
     '</div>';
 
@@ -616,6 +937,10 @@ function openSearch(query, movie) {
 
   screen.querySelector('#rd-get-id').onclick = function () {
     getRDUserId(screen, this);
+  };
+
+  screen.querySelector('#rd-sort-button').onclick = function () {
+    openSortMenu(screen);
   };
 
   var parserCounts = {};
@@ -645,9 +970,12 @@ function openSearch(query, movie) {
       });
     });
 
+    screen.__rdItems = all;
+
     var box = screen.querySelector('#rd-results');
     var details = document.createElement('details');
 
+    details.id = 'rd-search-diagnostics';
     details.style.cssText =
       'margin:14px 0;padding:12px;background:#292929;border-radius:8px';
 
@@ -656,6 +984,7 @@ function openSearch(query, movie) {
     details.appendChild(summary);
 
     var pre = document.createElement('pre');
+
     pre.style.cssText =
       'white-space:pre-wrap;overflow-wrap:anywhere;font:13px monospace';
 
@@ -672,89 +1001,20 @@ function openSearch(query, movie) {
 
     if (!all.length) {
       var empty = document.createElement('p');
+
       empty.textContent =
         'Раздачи не найдены. Проверь название или доступность парсера.';
+
       box.appendChild(empty);
       screen.querySelector('#rd-status').textContent = 'Раздачи не найдены.';
       return;
     }
 
     all.forEach(function (item) {
-      var card = document.createElement('div');
-
-      card.style.cssText =
-        'padding:14px;margin:10px 0;background:#303030;' +
-        'border-radius:8px;line-height:1.5;overflow-wrap:anywhere';
-
-      var title = document.createElement('div');
-      title.style.cssText = 'font-weight:600;margin-bottom:6px';
-      title.textContent = item.title;
-      card.appendChild(title);
-
-      var meta = document.createElement('div');
-      meta.style.cssText = 'opacity:.75;font-size:.9em';
-
-      var bits = [];
-      if (item.size) bits.push(formatSize(item.size));
-      if (item.seeders) bits.push('Сиды: ' + item.seeders);
-      if (item.tracker) bits.push(item.tracker);
-
-      meta.textContent = bits.join(' · ');
-      card.appendChild(meta);
-
-      // Новая диагностика: имя карточки и dn внутри magnet.
-      var diagDetails = document.createElement('details');
-
-      diagDetails.style.cssText =
-        'margin-top:10px;padding:10px;background:#242424;' +
-        'border-radius:6px;font-size:13px';
-
-      var diagSummary = document.createElement('summary');
-      diagSummary.textContent = 'Проверка magnet / имени dn';
-      diagDetails.appendChild(diagSummary);
-
-      var diagPre = document.createElement('pre');
-      diagPre.style.cssText =
-        'white-space:pre-wrap;overflow-wrap:anywhere;' +
-        'font:12px monospace;line-height:1.5';
-
-      var diag = magnetDiagnostic(item);
-
-      diagPre.textContent =
-        'Название карточки Lampa:\n' + diag.title +
-        '\n\nИмя dn в magnet:\n' + diag.dn +
-        '\n\nHash:\n' + diag.hash +
-        '\n\nMagnet найден: ' + (diag.magnetFound ? 'да' : 'нет');
-
-      diagDetails.appendChild(diagPre);
-      card.appendChild(diagDetails);
-
-      var cacheLabel = document.createElement('div');
-      cacheLabel.setAttribute('data-cache-hash', item.hash);
-      cacheLabel.style.cssText =
-        'margin-top:6px;color:#ffc766;font-size:.9em';
-      cacheLabel.textContent = 'Ожидаем проверку DMM…';
-      card.appendChild(cacheLabel);
-
-      var button = document.createElement('button');
-      button.textContent = 'Добавить и выбрать файлы';
-      button.style.cssText =
-        'margin-top:10px;padding:10px 14px;border:0;' +
-        'border-radius:6px;background:#7a5cff;color:#fff;cursor:pointer';
-
-      var result = document.createElement('div');
-      result.style.cssText =
-        'margin-top:8px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:.9em';
-
-      button.onclick = function () {
-        testOne(item, button, result);
-      };
-
-      card.appendChild(button);
-      card.appendChild(result);
-      box.appendChild(card);
+      item.cacheState = 'checking';
     });
 
+    renderCards(screen);
     runCacheCheck(all, imdbId, access, screen);
   }).catch(function (err) {
     if (screen.isConnected) {
