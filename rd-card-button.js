@@ -163,6 +163,32 @@ function magnetOf(item) {
     '&dn=' + encodeURIComponent(item.title || 'Torrent');
 }
 
+/*
+ * Диагностика magnet:
+ * показывает название карточки, dn и hash.
+ * Ничего не меняет в самой magnet-ссылке.
+ */
+function magnetDiagnostic(item) {
+  var magnet = item.magnet || magnetOf(item);
+  var match = String(magnet || '').match(/[?&]dn=([^&]*)/i);
+  var dn = '';
+
+  if (match) {
+    try {
+      dn = decodeURIComponent(match[1].replace(/\+/g, ' '));
+    } catch (e) {
+      dn = match[1];
+    }
+  }
+
+  return {
+    title: item.title || '',
+    dn: dn || '(параметр dn отсутствует)',
+    hash: item.hash || '',
+    magnetFound: !!magnet
+  };
+}
+
 function search(host, q) {
   var url = host +
     '/api/v2.0/indexers/all/results?Query=' +
@@ -194,7 +220,6 @@ function search(host, q) {
 
 /*
  * DMM: POST с IMDb ID и хэшами раздач.
- * Токен RD передаётся Worker для проверки аккаунта.
  */
 function checkDMM(imdbId, hashes, access) {
   if (!imdbId) {
@@ -221,19 +246,6 @@ function checkDMM(imdbId, hashes, access) {
   }).then(parseResponse);
 }
 
-/*
- * Реальный ответ DMM:
- * {
- *   "available": [
- *     {
- *       "hash": "...",
- *       "files": [{"file_id": 1, "path": "...", "bytes": 123}]
- *     }
- *   ]
- * }
- *
- * Ищем именно совпадение хэша в available.
- */
 function findHashResult(data, hash) {
   var wanted = String(hash || '').toLowerCase();
 
@@ -258,10 +270,6 @@ function findHashResult(data, hash) {
 function classifyCache(result) {
   if (!result) return 'not-confirmed';
 
-  /*
-   * DMM вернул хэш в available.
-   * Непустой files — подтверждение доступных файлов.
-   */
   if (Array.isArray(result.files)) {
     return result.files.length > 0 ? 'cached' : 'unknown';
   }
@@ -439,8 +447,7 @@ function runCacheCheck(items, imdbId, access, screen) {
             node.style.color = '#72e6a2';
             cachedCount++;
           } else if (state === 'not-confirmed') {
-            node.textContent =
-              'Кэш DMM не подтверждён';
+            node.textContent = 'Кэш DMM не подтверждён';
             node.style.color = '#ffc766';
             notConfirmedCount++;
           } else {
@@ -487,10 +494,6 @@ function runCacheCheck(items, imdbId, access, screen) {
   });
 }
 
-/*
- * Добавление магнита в RD — отдельное действие.
- * Проверка DMM не добавляет раздачи в аккаунт.
- */
 function testOne(item, button, resultNode) {
   var access = token();
 
@@ -698,6 +701,33 @@ function openSearch(query, movie) {
 
       meta.textContent = bits.join(' · ');
       card.appendChild(meta);
+
+      // Новая диагностика: имя карточки и dn внутри magnet.
+      var diagDetails = document.createElement('details');
+
+      diagDetails.style.cssText =
+        'margin-top:10px;padding:10px;background:#242424;' +
+        'border-radius:6px;font-size:13px';
+
+      var diagSummary = document.createElement('summary');
+      diagSummary.textContent = 'Проверка magnet / имени dn';
+      diagDetails.appendChild(diagSummary);
+
+      var diagPre = document.createElement('pre');
+      diagPre.style.cssText =
+        'white-space:pre-wrap;overflow-wrap:anywhere;' +
+        'font:12px monospace;line-height:1.5';
+
+      var diag = magnetDiagnostic(item);
+
+      diagPre.textContent =
+        'Название карточки Lampa:\n' + diag.title +
+        '\n\nИмя dn в magnet:\n' + diag.dn +
+        '\n\nHash:\n' + diag.hash +
+        '\n\nMagnet найден: ' + (diag.magnetFound ? 'да' : 'нет');
+
+      diagDetails.appendChild(diagPre);
+      card.appendChild(diagDetails);
 
       var cacheLabel = document.createElement('div');
       cacheLabel.setAttribute('data-cache-hash', item.hash);
