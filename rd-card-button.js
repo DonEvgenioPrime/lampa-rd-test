@@ -58,11 +58,14 @@ function req(url, access, options) {
 
   if (access) headers.Authorization = 'Bearer ' + access;
 
-  return fetch(PROXY + '?url=' + encodeURIComponent(url), {
-    method: options.method || 'GET',
-    headers: headers,
-    body: options.body
-  }).then(parseResponse);
+  return fetch(
+    PROXY + '?url=' + encodeURIComponent(url),
+    {
+      method: options.method || 'GET',
+      headers: headers,
+      body: options.body
+    }
+  ).then(parseResponse);
 }
 
 function postForm(url, access, values) {
@@ -93,6 +96,7 @@ function getImdbId(movie) {
 
   var ids = movie.ids || {};
   var external = movie.external_ids || {};
+
   var candidates = [
     movie.imdb_id,
     movie.imdbId,
@@ -130,6 +134,7 @@ function hashOf(x) {
 
 function magnetOf(item) {
   var raw = item.raw || {};
+
   var candidates = [
     raw.MagnetUri,
     raw.magnetUri,
@@ -187,17 +192,19 @@ function search(host, q) {
   });
 }
 
+/*
+ * DMM: POST с IMDb ID и хэшами раздач.
+ * Токен RD передаётся Worker для проверки аккаунта.
+ */
 function checkDMM(imdbId, hashes, access) {
   if (!imdbId) {
     return Promise.reject(
-      new Error('Не удалось определить IMDb ID фильма')
+      new Error('IMDb ID фильма не найден в данных Lampa')
     );
   }
 
   if (!hashes || !hashes.length) {
-    return Promise.reject(
-      new Error('Нет хэшей для проверки')
-    );
+    return Promise.reject(new Error('Нет хэшей для проверки'));
   }
 
   return fetch(PROXY + '?action=dmm-availability', {
@@ -215,97 +222,48 @@ function checkDMM(imdbId, hashes, access) {
 }
 
 /*
- * Ищет результат для конкретного hash в ответе DMM.
- * Если структура ответа неизвестна, не делает ложных выводов.
+ * Реальный ответ DMM:
+ * {
+ *   "available": [
+ *     {
+ *       "hash": "...",
+ *       "files": [{"file_id": 1, "path": "...", "bytes": 123}]
+ *     }
+ *   ]
+ * }
+ *
+ * Ищем именно совпадение хэша в available.
  */
 function findHashResult(data, hash) {
   var wanted = String(hash || '').toLowerCase();
-  var found = null;
-  var seen = [];
 
-  function walk(value) {
-    if (!value || typeof value !== 'object' || found) return;
-    if (seen.indexOf(value) !== -1) return;
-    seen.push(value);
-
-    if (Array.isArray(value)) {
-      value.forEach(walk);
-      return;
-    }
-
-    var currentHash = value.hash || value.infoHash ||
-      value.info_hash || value.torrentHash || value.torrent_hash;
-
-    if (currentHash && String(currentHash).toLowerCase() === wanted) {
-      found = value;
-      return;
-    }
-
-    if (Object.prototype.hasOwnProperty.call(value, wanted)) {
-      found = value[wanted];
-      return;
-    }
-
-    Object.keys(value).forEach(function (key) {
-      if (key.toLowerCase() === wanted) {
-        found = value[key];
-      }
-    });
-
-    if (found) return;
-
-    Object.keys(value).forEach(function (key) {
-      walk(value[key]);
-    });
+  if (!data || !Array.isArray(data.available)) {
+    return null;
   }
 
-  walk(data);
-  return found;
+  for (var i = 0; i < data.available.length; i++) {
+    var item = data.available[i];
+
+    if (
+      item &&
+      String(item.hash || '').toLowerCase() === wanted
+    ) {
+      return item;
+    }
+  }
+
+  return null;
 }
 
 function classifyCache(result) {
-  if (result === true) return 'cached';
-  if (result === false || result == null) return 'unknown';
+  if (!result) return 'not-confirmed';
 
-  if (typeof result === 'string') {
-    var s = result.toLowerCase();
-
-    if (['cached', 'available', 'instant', 'ready', 'true'].indexOf(s) !== -1) {
-      return 'cached';
-    }
-
-    if (['not_cached', 'uncached', 'unavailable', 'false'].indexOf(s) !== -1) {
-      return 'not-cached';
-    }
-
-    return 'unknown';
-  }
-
-  if (typeof result !== 'object') return 'unknown';
-
-  var positiveKeys = [
-    'cached', 'available', 'instantAvailability',
-    'instant_availability', 'isCached', 'is_cached'
-  ];
-
-  for (var i = 0; i < positiveKeys.length; i++) {
-    var key = positiveKeys[i];
-
-    if (typeof result[key] === 'boolean') {
-      return result[key] ? 'cached' : 'not-cached';
-    }
-  }
-
-  var status = String(
-    result.status || result.state || result.availability || ''
-  ).toLowerCase();
-
-  if (['cached', 'available', 'instant', 'ready'].indexOf(status) !== -1) {
-    return 'cached';
-  }
-
-  if (['not_cached', 'uncached', 'unavailable'].indexOf(status) !== -1) {
-    return 'not-cached';
+  /*
+   * DMM вернул хэш в available.
+   * Непустой files — подтверждение доступных файлов.
+   */
+  if (Array.isArray(result.files)) {
+    return result.files.length > 0 ? 'cached' : 'unknown';
   }
 
   return 'unknown';
@@ -324,6 +282,7 @@ function esc(s) {
 
 function formatSize(n) {
   n = Number(n);
+
   if (!n) return '';
 
   var units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -419,17 +378,16 @@ function getRDUserId(screen, button) {
   });
 }
 
-/*
- * Проверяет хэши через DMM.
- * Проверка кэша не добавляет торрент в аккаунт Real-Debrid.
- */
 function runCacheCheck(items, imdbId, access, screen) {
   var status = screen.querySelector('#rd-status');
-  var labels = screen.querySelectorAll('[data-cache-hash]');
 
   if (!imdbId) {
     status.textContent =
-      'Кэш не проверен: у фильма не найден IMDb ID.';
+      'Кэш не проверен: IMDb ID не найден в данных фильма.';
+    items.forEach(function (item) {
+      var node = screen.querySelector('[data-cache-hash="' + item.hash + '"]');
+      if (node) node.textContent = 'Не найден IMDb ID фильма';
+    });
     return;
   }
 
@@ -438,71 +396,100 @@ function runCacheCheck(items, imdbId, access, screen) {
     return;
   }
 
+  var batches = [];
+  for (var i = 0; i < items.length; i += 100) {
+    batches.push(items.slice(i, i + 100));
+  }
+
   status.textContent =
-    'Проверяем кэш DMM · IMDb: ' + imdbId + '…';
+    'Проверяем DMM · IMDb: ' + imdbId + ' · раздач: ' + items.length;
 
-  var hashes = items.map(function (item) {
-    return item.hash;
-  }).slice(0, 100);
+  var cachedCount = 0;
+  var notConfirmedCount = 0;
+  var unknownCount = 0;
+  var errors = [];
 
-  checkDMM(imdbId, hashes, access).then(function (data) {
+  batches.reduce(function (chain, batch) {
+    return chain.then(function () {
+      return checkDMM(
+        imdbId,
+        batch.map(function (item) { return item.hash; }),
+        access
+      ).then(function (data) {
+        if (!screen.isConnected) return;
+
+        if (!data || !Array.isArray(data.available)) {
+          throw new Error('Ответ DMM не содержит массива available');
+        }
+
+        batch.forEach(function (item) {
+          var node = screen.querySelector(
+            '[data-cache-hash="' + item.hash + '"]'
+          );
+
+          var result = findHashResult(data, item.hash);
+          var state = classifyCache(result);
+
+          if (!node) return;
+
+          if (state === 'cached') {
+            node.textContent =
+              '⚡ DMM: есть доступные файлы (' +
+              result.files.length + ')';
+            node.style.color = '#72e6a2';
+            cachedCount++;
+          } else if (state === 'not-confirmed') {
+            node.textContent =
+              'Кэш DMM не подтверждён';
+            node.style.color = '#ffc766';
+            notConfirmedCount++;
+          } else {
+            node.textContent =
+              'DMM вернул хэш, но список файлов неизвестен';
+            node.style.color = '#ffc766';
+            unknownCount++;
+          }
+        });
+      });
+    }).catch(function (err) {
+      errors.push(err.message);
+
+      batch.forEach(function (item) {
+        var node = screen.querySelector(
+          '[data-cache-hash="' + item.hash + '"]'
+        );
+
+        if (node) {
+          node.textContent = 'Ошибка DMM: ' + err.message;
+          node.style.color = '#ff8585';
+        }
+      });
+    });
+  }, Promise.resolve()).then(function () {
     if (!screen.isConnected) return;
 
-    var cachedCount = 0;
-    var notCachedCount = 0;
-    var unknownCount = 0;
-
-    items.forEach(function (item) {
-      var node = screen.querySelector(
-        '[data-cache-hash="' + item.hash + '"]'
-      );
-      if (!node) return;
-
-      var result = findHashResult(data, item.hash);
-      var state = classifyCache(result);
-
-      if (state === 'cached') {
-        node.textContent = '⚡ Есть в базе доступности DMM';
-        node.style.color = '#72e6a2';
-        cachedCount++;
-      } else if (state === 'not-cached') {
-        node.textContent = 'Нет подтверждения кэша в DMM';
-        node.style.color = '#ffca76';
-        notCachedCount++;
-      } else {
-        node.textContent = 'Ответ DMM получен, статус не распознан';
-        node.style.color = '#ffc766';
-        unknownCount++;
-      }
-    });
-
     status.textContent =
-      'DMM ответил · IMDb: ' + imdbId +
-      ' · подтверждено: ' + cachedCount +
-      ' · без подтверждения: ' + notCachedCount +
-      ' · неизвестно: ' + unknownCount;
+      'DMM · подтверждено: ' + cachedCount +
+      ' · без подтверждения: ' + notConfirmedCount +
+      ' · неизвестно: ' + unknownCount +
+      (errors.length ? ' · ошибок: ' + errors.length : '');
 
     var diag = screen.querySelector('#rd-dmm-diagnostic');
     if (diag) {
-      diag.textContent = JSON.stringify(data, null, 2);
+      diag.textContent =
+        'IMDb ID: ' + imdbId +
+        '\nПроверено раздач: ' + items.length +
+        '\nПодтверждено: ' + cachedCount +
+        '\nБез подтверждения: ' + notConfirmedCount +
+        '\nНеизвестно: ' + unknownCount +
+        (errors.length ? '\nОшибки:\n' + errors.join('\n') : '');
     }
-  }).catch(function (err) {
-    if (!screen.isConnected) return;
-
-    status.textContent = 'Ошибка проверки DMM: ' + err.message;
-
-    screen.querySelectorAll('[data-cache-hash]').forEach(function (node) {
-      node.textContent = 'Ошибка проверки DMM';
-      node.style.color = '#ff8585';
-    });
-
-    var diag = screen.querySelector('#rd-dmm-diagnostic');
-    if (diag) diag.textContent = err.message;
   });
 }
 
 /*
- * Добавляет магнит в RD и выбирает все файлы.
+ * Добавление магнита в RD — отдельное действие.
+ * Проверка DMM не добавляет раздачи в аккаунт.
  */
 function testOne(item, button, resultNode) {
   var access = token();
@@ -568,7 +555,7 @@ function testOne(item, button, resultNode) {
   }).catch(function (err) {
     resultNode.textContent =
       'Ошибка добавления: ' + err.message +
-      '\nЕсли задача появилась в RD, не отправляй магнит повторно, пока не проверишь её список задач.';
+      '\nЕсли задача появилась в RD, проверь список задач перед повторной отправкой.';
 
     button.textContent = 'Ошибка добавления';
     button.disabled = true;
@@ -607,8 +594,9 @@ function openSearch(query, movie) {
       '<p id="rd-status">Ищем: ' + esc(query) + '</p>' +
       '<div style="padding:12px;background:#333;border-radius:8px;' +
       'line-height:1.5;margin-bottom:14px">' +
-        'DMM проверяет только те хэши, которые переданы в запросе. ' +
-        'Отсутствие результата не доказывает, что раздача недоступна в RD.' +
+        '⚡ Зелёная метка означает, что DMM вернул этот хэш в available ' +
+        'с непустым списком файлов. Отсутствие подтверждения не доказывает ' +
+        'отсутствие кэша в Real-Debrid.' +
       '</div>' +
       '<div id="rd-results"></div>' +
       '<details style="margin-top:16px;padding:12px;background:#292929;border-radius:8px">' +
@@ -656,6 +644,7 @@ function openSearch(query, movie) {
 
     var box = screen.querySelector('#rd-results');
     var details = document.createElement('details');
+
     details.style.cssText =
       'margin:14px 0;padding:12px;background:#292929;border-radius:8px';
 
@@ -680,7 +669,8 @@ function openSearch(query, movie) {
 
     if (!all.length) {
       var empty = document.createElement('p');
-      empty.textContent = 'Раздачи не найдены. Проверь название или доступность парсера.';
+      empty.textContent =
+        'Раздачи не найдены. Проверь название или доступность парсера.';
       box.appendChild(empty);
       screen.querySelector('#rd-status').textContent = 'Раздачи не найдены.';
       return;
@@ -688,6 +678,7 @@ function openSearch(query, movie) {
 
     all.forEach(function (item) {
       var card = document.createElement('div');
+
       card.style.cssText =
         'padding:14px;margin:10px 0;background:#303030;' +
         'border-radius:8px;line-height:1.5;overflow-wrap:anywhere';
@@ -704,6 +695,7 @@ function openSearch(query, movie) {
       if (item.size) bits.push(formatSize(item.size));
       if (item.seeders) bits.push('Сиды: ' + item.seeders);
       if (item.tracker) bits.push(item.tracker);
+
       meta.textContent = bits.join(' · ');
       card.appendChild(meta);
 
@@ -755,6 +747,7 @@ function addButton(e) {
 
   var movie = e.data.movie;
   var title = movie.title || movie.name || movie.original_title || '';
+
   if (!title) return;
 
   var button = window.jQuery(
