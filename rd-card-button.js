@@ -287,7 +287,7 @@ function search(host, q) {
   });
 }
 
-/* Сортировка списка. */
+/* Сортировка результатов. */
 function sortItems(items, mode) {
   var rows = items.slice();
 
@@ -460,6 +460,7 @@ function getRDUserId(screen, button) {
     result.appendChild(label);
 
     var copy = document.createElement('button');
+    copy.type = 'button';
     copy.textContent = 'Скопировать ID';
     copy.style.cssText =
       'margin-top:8px;padding:8px 12px;border:0;border-radius:6px';
@@ -715,7 +716,7 @@ function openSortMenu(screen) {
     row.style.cssText =
       'display:flex;width:100%;align-items:center;justify-content:space-between;' +
       'gap:12px;padding:17px 6px;border:0;background:transparent;color:#fff;' +
-      'font-size:17px;text-align:left;cursor:pointer';
+      'font-size:17px;text-align:left;cursor:pointer;touch-action:manipulation';
 
     var label = document.createElement('span');
     label.textContent = option.label;
@@ -744,18 +745,17 @@ function openSortMenu(screen) {
   screen.appendChild(menu);
 }
 
-/* Перерисовываем карточки в новом порядке. Данные и статусы хранятся в item. */
+/*
+ * ИСПРАВЛЕНИЕ:
+ * карточка создаётся один раз и сохраняется в item._rdCard.
+ * При сортировке appendChild перемещает существующую карточку.
+ * Кнопка и её click-обработчик не пересоздаются.
+ */
 function renderCards(screen) {
   var all = screen.__rdItems || [];
   var box = screen.querySelector('#rd-results');
 
   if (!box) return;
-
-  var diagnostics = box.querySelector('#rd-search-diagnostics');
-
-  box.innerHTML = '';
-
-  if (diagnostics) box.appendChild(diagnostics);
 
   var mode = getSortMode();
   var sorted = sortItems(all, mode);
@@ -771,106 +771,115 @@ function renderCards(screen) {
   }
 
   sorted.forEach(function (item) {
-    var card = document.createElement('div');
+    var card = item._rdCard;
 
-    card.style.cssText =
-      'padding:14px;margin:10px 0;background:#303030;' +
-      'border-radius:8px;line-height:1.5;overflow-wrap:anywhere';
+    if (!card) {
+      card = document.createElement('div');
+      item._rdCard = card;
 
-    var title = document.createElement('div');
-    title.style.cssText = 'font-weight:600;margin-bottom:6px';
-    title.textContent = item.title;
-    card.appendChild(title);
+      card.style.cssText =
+        'padding:14px;margin:10px 0;background:#303030;' +
+        'border-radius:8px;line-height:1.5;overflow-wrap:anywhere';
 
-    var meta = document.createElement('div');
-    meta.style.cssText = 'opacity:.75;font-size:.9em';
+      var title = document.createElement('div');
+      title.style.cssText = 'font-weight:600;margin-bottom:6px';
+      title.textContent = item.title;
+      card.appendChild(title);
 
-    var bits = [];
+      var meta = document.createElement('div');
+      meta.style.cssText = 'opacity:.75;font-size:.9em';
 
-    if (item.size) bits.push(formatSize(item.size));
+      var bits = [];
 
-    bits.push('Сиды: ' + item.seeders);
+      if (item.size) bits.push(formatSize(item.size));
+      bits.push('Сиды: ' + item.seeders);
+      if (item.tracker) bits.push(item.tracker);
 
-    if (item.tracker) bits.push(item.tracker);
+      if (item.dateAdded) {
+        bits.push('Дата: ' + new Date(item.dateAdded).toLocaleDateString());
+      }
 
-    if (item.dateAdded) {
-      bits.push('Дата: ' + new Date(item.dateAdded).toLocaleDateString());
+      meta.textContent = bits.join(' · ');
+      card.appendChild(meta);
+
+      var diagDetails = document.createElement('details');
+      diagDetails.style.cssText =
+        'margin-top:10px;padding:10px;background:#242424;' +
+        'border-radius:6px;font-size:13px';
+
+      var diagSummary = document.createElement('summary');
+      diagSummary.textContent = 'Проверка magnet / имени dn';
+      diagDetails.appendChild(diagSummary);
+
+      var diagPre = document.createElement('pre');
+      diagPre.style.cssText =
+        'white-space:pre-wrap;overflow-wrap:anywhere;' +
+        'font:12px monospace;line-height:1.5';
+
+      var diag = magnetDiagnostic(item);
+
+      diagPre.textContent =
+        'Название карточки Lampa:\n' + diag.title +
+        '\n\nИмя dn в magnet:\n' + diag.dn +
+        '\n\nHash:\n' + diag.hash +
+        '\n\nMagnet найден: ' + (diag.magnetFound ? 'да' : 'нет');
+
+      diagDetails.appendChild(diagPre);
+      card.appendChild(diagDetails);
+
+      var cacheLabel = document.createElement('div');
+      cacheLabel.setAttribute('data-cache-hash', item.hash);
+      cacheLabel.style.cssText = 'margin-top:6px;font-size:.9em';
+      card.appendChild(cacheLabel);
+
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = 'Добавить и выбрать файлы';
+
+      button.style.cssText =
+        'display:block;position:relative;z-index:1;' +
+        'margin-top:10px;padding:12px 14px;border:0;' +
+        'border-radius:6px;background:#7a5cff;color:#fff;' +
+        'cursor:pointer;touch-action:manipulation';
+
+      var result = document.createElement('div');
+      result.style.cssText =
+        'margin-top:8px;white-space:pre-wrap;' +
+        'overflow-wrap:anywhere;font-size:.9em';
+
+      button.addEventListener('click', function (event) {
+        event.stopPropagation();
+        testOne(item, button, result);
+      });
+
+      card.appendChild(button);
+      card.appendChild(result);
     }
 
-    meta.textContent = bits.join(' · ');
-    card.appendChild(meta);
+    // Обновляем метку DMM, не заменяя саму карточку.
+    var cacheLabel = card.querySelector('[data-cache-hash]');
 
-    var diagDetails = document.createElement('details');
-
-    diagDetails.style.cssText =
-      'margin-top:10px;padding:10px;background:#242424;' +
-      'border-radius:6px;font-size:13px';
-
-    var diagSummary = document.createElement('summary');
-    diagSummary.textContent = 'Проверка magnet / имени dn';
-    diagDetails.appendChild(diagSummary);
-
-    var diagPre = document.createElement('pre');
-
-    diagPre.style.cssText =
-      'white-space:pre-wrap;overflow-wrap:anywhere;' +
-      'font:12px monospace;line-height:1.5';
-
-    var diag = magnetDiagnostic(item);
-
-    diagPre.textContent =
-      'Название карточки Lampa:\n' + diag.title +
-      '\n\nИмя dn в magnet:\n' + diag.dn +
-      '\n\nHash:\n' + diag.hash +
-      '\n\nMagnet найден: ' + (diag.magnetFound ? 'да' : 'нет');
-
-    diagDetails.appendChild(diagPre);
-    card.appendChild(diagDetails);
-
-    var cacheLabel = document.createElement('div');
-    cacheLabel.setAttribute('data-cache-hash', item.hash);
-    cacheLabel.style.cssText = 'margin-top:6px;font-size:.9em';
-
-    if (item.cacheState === 'cached') {
-      cacheLabel.textContent = '⚡ DMM: кэш подтверждён';
-      cacheLabel.style.color = '#72e6a2';
-    } else if (item.cacheState === 'unknown') {
-      cacheLabel.textContent =
-        'DMM вернул хэш, но список файлов неизвестен';
-      cacheLabel.style.color = '#ffc766';
-    } else if (item.cacheState === 'error') {
-      cacheLabel.textContent = 'Ошибка проверки DMM';
-      cacheLabel.style.color = '#ff8585';
-    } else if (item.cacheState === 'checking') {
-      cacheLabel.textContent = 'Проверяем DMM…';
-      cacheLabel.style.color = '#ffc766';
-    } else {
-      cacheLabel.textContent = 'Кэш DMM не подтверждён';
-      cacheLabel.style.color = '#ffc766';
+    if (cacheLabel) {
+      if (item.cacheState === 'cached') {
+        cacheLabel.textContent = '⚡ DMM: кэш подтверждён';
+        cacheLabel.style.color = '#72e6a2';
+      } else if (item.cacheState === 'unknown') {
+        cacheLabel.textContent =
+          'DMM вернул хэш, но список файлов неизвестен';
+        cacheLabel.style.color = '#ffc766';
+      } else if (item.cacheState === 'error') {
+        cacheLabel.textContent = 'Ошибка проверки DMM';
+        cacheLabel.style.color = '#ff8585';
+      } else if (item.cacheState === 'checking') {
+        cacheLabel.textContent = 'Проверяем DMM…';
+        cacheLabel.style.color = '#ffc766';
+      } else {
+        cacheLabel.textContent = 'Кэш DMM не подтверждён';
+        cacheLabel.style.color = '#ffc766';
+      }
     }
 
-    card.appendChild(cacheLabel);
-
-    var button = document.createElement('button');
-    button.textContent = 'Добавить и выбрать файлы';
-
-    button.style.cssText =
-      'margin-top:10px;padding:10px 14px;border:0;' +
-      'border-radius:6px;background:#7a5cff;color:#fff;cursor:pointer';
-
-    var result = document.createElement('div');
-
-    result.style.cssText =
-      'margin-top:8px;white-space:pre-wrap;' +
-      'overflow-wrap:anywhere;font-size:.9em';
-
-    button.onclick = function () {
-      testOne(item, button, result);
-    };
-
-    card.appendChild(button);
-    card.appendChild(result);
-
+    // Перемещение существующей карточки сохраняет обработчик кнопки.
     box.appendChild(card);
   });
 }
@@ -910,7 +919,7 @@ function openSearch(query, movie) {
       'flex-wrap:wrap;margin:12px 0">' +
         '<button id="rd-sort-button" style="padding:10px 14px;' +
         'border:1px solid #666;border-radius:8px;background:#333;' +
-        'color:#fff;cursor:pointer">Сортировка</button>' +
+        'color:#fff;cursor:pointer;touch-action:manipulation">Сортировка</button>' +
         '<span style="opacity:.8">Текущая: ' +
         '<span id="rd-sort-current"></span></span>' +
       '</div>' +
