@@ -1,3 +1,4 @@
+
 (function () {
 'use strict';
 
@@ -287,7 +288,6 @@ function search(host, q) {
   });
 }
 
-/* Сортировка результатов. */
 function sortItems(items, mode) {
   var rows = items.slice();
 
@@ -369,8 +369,14 @@ function findHashResult(data, hash) {
   return null;
 }
 
+/*
+ * Зелёный статус ставим только при наличии непустого массива files.
+ * Пустой массив и неизвестная структура ответа не подтверждают кеш.
+ */
 function classifyCache(result) {
-  if (!result) return 'not-confirmed';
+  if (!result || typeof result !== 'object') {
+    return 'not-confirmed';
+  }
 
   if (Array.isArray(result.files)) {
     return result.files.length > 0 ? 'cached' : 'unknown';
@@ -478,7 +484,9 @@ function getRDUserId(screen, button) {
     };
 
     result.appendChild(copy);
-    screen.querySelector('#rd-status').after(result);
+
+    var status = screen.querySelector('#rd-status');
+    if (status) status.after(result);
 
     button.textContent = 'ID получен';
     button.disabled = false;
@@ -494,14 +502,19 @@ function runCacheCheck(items, imdbId, access, screen) {
 
   if (!imdbId) {
     status.textContent =
-      'Кэш не проверен: IMDb ID не найден в данных фильма.';
+      'Кеш не проверен: IMDb ID не найден в данных фильма.';
 
     items.forEach(function (item) {
+      item.cacheState = 'not-confirmed';
+
       var node = screen.querySelector(
         '[data-cache-hash="' + item.hash + '"]'
       );
 
-      if (node) node.textContent = 'Не найден IMDb ID фильма';
+      if (node) {
+        node.textContent = 'Не найден IMDb ID фильма';
+        node.style.color = '#ffc766';
+      }
     });
 
     return;
@@ -551,25 +564,32 @@ function runCacheCheck(items, imdbId, access, screen) {
 
           item.cacheState = state;
 
-          if (!node) return;
-
           if (state === 'cached') {
-            node.textContent =
-              '⚡ DMM: есть доступные файлы (' +
-              result.files.length + ')';
-
-            node.style.color = '#72e6a2';
             cachedCount++;
-          } else if (state === 'not-confirmed') {
-            node.textContent = 'Кэш DMM не подтверждён';
-            node.style.color = '#ffc766';
-            notConfirmedCount++;
-          } else {
-            node.textContent =
-              'DMM вернул хэш, но список файлов неизвестен';
 
-            node.style.color = '#ffc766';
+            if (node) {
+              node.textContent =
+                '⚡ DMM: есть доступные файлы (' +
+                result.files.length + ')';
+
+              node.style.color = '#72e6a2';
+            }
+          } else if (state === 'not-confirmed') {
+            notConfirmedCount++;
+
+            if (node) {
+              node.textContent = 'Кеш DMM не подтверждён';
+              node.style.color = '#ffc766';
+            }
+          } else {
             unknownCount++;
+
+            if (node) {
+              node.textContent =
+                'DMM не подтвердил доступные файлы';
+
+              node.style.color = '#ffc766';
+            }
           }
         });
       });
@@ -584,7 +604,8 @@ function runCacheCheck(items, imdbId, access, screen) {
         );
 
         if (node) {
-          node.textContent = 'Ошибка DMM: ' + err.message;
+          node.textContent =
+            'Кеш не подтверждён: ошибка проверки DMM';
           node.style.color = '#ff8585';
         }
       });
@@ -612,6 +633,12 @@ function runCacheCheck(items, imdbId, access, screen) {
   });
 }
 
+/*
+ * Защита от двойного клика.
+ * После подтверждённого создания задачи не отправляем magnet снова.
+ * При неоднозначном сетевом результате блокируем повторную отправку,
+ * потому что RD мог получить запрос, даже если ответ не дошёл.
+ */
 function testOne(item, button, resultNode) {
   var access = token();
 
@@ -620,10 +647,20 @@ function testOne(item, button, resultNode) {
     return;
   }
 
+  if (button.dataset.rdBusy === '1') return;
+
+  if (button.dataset.rdTaskCreated) {
+    resultNode.textContent =
+      'Задача уже была создана: ' + button.dataset.rdTaskCreated +
+      '\nПроверь её состояние в Real-Debrid.';
+    return;
+  }
+
   var magnet = item.magnet || magnetOf(item);
 
   if (!magnet) {
-    resultNode.textContent = 'Не удалось получить magnet-ссылку или hash.';
+    resultNode.textContent =
+      'Не удалось получить magnet-ссылку или hash.';
     return;
   }
 
@@ -633,6 +670,7 @@ function testOne(item, button, resultNode) {
     'Магнит будет отправлен в твой аккаунт RD. Продолжить?'
   )) return;
 
+  button.dataset.rdBusy = '1';
   button.disabled = true;
   button.textContent = 'Отправляем в RD…';
   resultNode.textContent = 'Создаём задачу…';
@@ -641,10 +679,16 @@ function testOne(item, button, resultNode) {
     magnet: magnet
   }).then(function (response) {
     if (!response || !response.id) {
-      throw new Error('RD не вернул ID задачи: ' + JSON.stringify(response));
+      throw new Error(
+        'RD не вернул ID задачи: ' + JSON.stringify(response)
+      );
     }
 
-    var id = response.id;
+    var id = String(response.id);
+
+    // Фиксируем ID сразу после успешного ответа RD.
+    button.dataset.rdTaskCreated = id;
+    button.textContent = 'Задача создана';
 
     resultNode.textContent =
       'Задача создана: ' + id + '\nВыбираем все файлы…';
@@ -668,18 +712,25 @@ function testOne(item, button, resultNode) {
       resultNode.textContent =
         'Задача RD создана: ' + id +
         '\nОшибка выбора файлов или проверки: ' + err.message +
-        '\nПроверь задачу в Real-Debrid вручную, прежде чем повторять добавление.';
+        '\nПроверь задачу в RD вручную, прежде чем повторять добавление.';
 
       button.textContent = 'Задача создана';
       button.disabled = true;
     });
   }).catch(function (err) {
-    resultNode.textContent =
-      'Ошибка добавления: ' + err.message +
-      '\nЕсли задача появилась в RD, проверь список задач перед повторной отправкой.';
-
-    button.textContent = 'Ошибка добавления';
+    /*
+     * Запрос мог дойти до RD, даже если ответ потерялся.
+     * Не отправляем тот же magnet повторно автоматически.
+     */
+    button.dataset.rdBusy = '0';
     button.disabled = true;
+    button.textContent = 'Проверь задачу RD';
+
+    resultNode.textContent =
+      'Не удалось подтвердить результат добавления: ' +
+      err.message +
+      '\nВозможно, RD успел создать задачу.' +
+      '\nПроверь список задач Real-Debrid перед повторной отправкой.';
   });
 }
 
@@ -727,7 +778,10 @@ function openSortMenu(screen) {
     check.style.cssText = 'font-size:24px;min-width:24px;text-align:center';
     row.appendChild(check);
 
-    row.onclick = function () {
+    row.onclick = function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+
       setSortMode(option.value);
       menu.remove();
       renderCards(screen);
@@ -745,12 +799,6 @@ function openSortMenu(screen) {
   screen.appendChild(menu);
 }
 
-/*
- * ИСПРАВЛЕНИЕ:
- * карточка создаётся один раз и сохраняется в item._rdCard.
- * При сортировке appendChild перемещает существующую карточку.
- * Кнопка и её click-обработчик не пересоздаются.
- */
 function renderCards(screen) {
   var all = screen.__rdItems || [];
   var box = screen.querySelector('#rd-results');
@@ -848,6 +896,7 @@ function renderCards(screen) {
         'overflow-wrap:anywhere;font-size:.9em';
 
       button.addEventListener('click', function (event) {
+        event.preventDefault();
         event.stopPropagation();
         testOne(item, button, result);
       });
@@ -856,30 +905,30 @@ function renderCards(screen) {
       card.appendChild(result);
     }
 
-    // Обновляем метку DMM, не заменяя саму карточку.
     var cacheLabel = card.querySelector('[data-cache-hash]');
 
     if (cacheLabel) {
       if (item.cacheState === 'cached') {
-        cacheLabel.textContent = '⚡ DMM: кэш подтверждён';
+        cacheLabel.textContent = '⚡ DMM: кеш подтверждён';
         cacheLabel.style.color = '#72e6a2';
       } else if (item.cacheState === 'unknown') {
         cacheLabel.textContent =
-          'DMM вернул хэш, но список файлов неизвестен';
+          'DMM не подтвердил доступные файлы';
         cacheLabel.style.color = '#ffc766';
       } else if (item.cacheState === 'error') {
-        cacheLabel.textContent = 'Ошибка проверки DMM';
+        cacheLabel.textContent =
+          'Ошибка проверки DMM — кеш не подтверждён';
         cacheLabel.style.color = '#ff8585';
       } else if (item.cacheState === 'checking') {
         cacheLabel.textContent = 'Проверяем DMM…';
         cacheLabel.style.color = '#ffc766';
       } else {
-        cacheLabel.textContent = 'Кэш DMM не подтверждён';
+        cacheLabel.textContent = 'Кеш DMM не подтверждён';
         cacheLabel.style.color = '#ffc766';
       }
     }
 
-    // Перемещение существующей карточки сохраняет обработчик кнопки.
+    // Перемещаем существующую карточку, не пересоздавая кнопку.
     box.appendChild(card);
   });
 }
@@ -926,9 +975,10 @@ function openSearch(query, movie) {
       '<p id="rd-status">Ищем: ' + esc(query) + '</p>' +
       '<div style="padding:12px;background:#333;border-radius:8px;' +
       'line-height:1.5;margin-bottom:14px">' +
-        '⚡ Зелёная метка означает, что DMM вернул этот хэш в available ' +
-        'с непустым списком файлов. Отсутствие подтверждения не доказывает ' +
-        'отсутствие кэша в Real-Debrid.' +
+        'Зелёная метка означает, что DMM вернул хэш в available ' +
+        'с непустым списком files. Это подтверждение по ответу DMM, ' +
+        'но не гарантия будущего воспроизведения. Отсутствие подтверждения ' +
+        'не доказывает отсутствие кеша в Real-Debrid.' +
       '</div>' +
       '<div id="rd-results"></div>' +
       '<details style="margin-top:16px;padding:12px;background:#292929;border-radius:8px">' +
@@ -948,7 +998,9 @@ function openSearch(query, movie) {
     getRDUserId(screen, this);
   };
 
-  screen.querySelector('#rd-sort-button').onclick = function () {
+  screen.querySelector('#rd-sort-button').onclick = function (event) {
+    event.preventDefault();
+    event.stopPropagation();
     openSortMenu(screen);
   };
 
@@ -1058,7 +1110,9 @@ function addButton(e) {
     openSearch(title, movie);
   });
 
-  button.on('click', function () {
+  button.on('click', function (event) {
+    event.preventDefault();
+    event.stopPropagation();
     openSearch(title, movie);
   });
 
