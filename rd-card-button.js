@@ -239,15 +239,13 @@ function parseDateValue(value) {
   return isNaN(parsed) ? 0 : parsed;
 }
 
-/* Изменение 1: поиск принимает токен RD. */
-function search(host, q, access) {
+function search(host, q) {
   var url = host +
     '/api/v2.0/indexers/all/results?Query=' +
     encodeURIComponent(q) +
     '&Category=2000,5000';
 
-  /* Изменение 2: передаём токен в req для проверки Worker. */
-  return req(url, access).then(function (data) {
+  return req(url).then(function (data) {
     var list = Array.isArray(data)
       ? data
       : (data.Results || data.results || []);
@@ -1008,9 +1006,8 @@ function openSearch(query, movie) {
   var parserCounts = {};
   var parserErrors = [];
 
-  /* Изменение 3: передаём токен в поиск парсера. */
   Promise.all(PARSERS.map(function (host) {
-    return search(host, query, access).then(function (rows) {
+    return search(host, query).then(function (rows) {
       parserCounts[host] = rows.length;
       return rows;
     }).catch(function (err) {
