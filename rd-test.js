@@ -154,15 +154,20 @@
 
     /*
      * Авторизация по коду устройства.
-     * OAuth-запросы направляются через существующий Worker.
+     * device/code и device/credentials используют GET.
+     * Получение токена выполняется через POST.
      */
     function connectAuth() {
-        return postForm(proxyUrl(OAUTH + 'device/code'), {
-            client_id: PUBLIC_CLIENT_ID,
-            new_credentials: 'yes'
-        }).then(function (device) {
-            if (!device.device_code) {
-                throw new Error('RD не вернул device_code.');
+        var deviceUrl = OAUTH + 'device/code?client_id=' +
+            encodeURIComponent(PUBLIC_CLIENT_ID) +
+            '&new_credentials=yes';
+
+        return request(proxyUrl(deviceUrl)).then(function (device) {
+            if (!device.device_code || !device.user_code) {
+                throw new Error(
+                    'RD не вернул корректный код устройства: ' +
+                    JSON.stringify(device)
+                );
             }
 
             var url = device.verification_url ||
@@ -170,14 +175,15 @@
 
             notify(
                 'Открой страницу авторизации RD:\n' + url +
-                '\n\nКод: ' + (device.user_code || '') +
+                '\n\nКод: ' + device.user_code +
                 '\n\nПосле подтверждения вернись в Lampa.'
             );
 
             var interval = Math.max(
                 5, Number(device.interval) || 5
             ) * 1000;
-            var timeout = (Number(device.expires_in) || 600) * 1000;
+
+            var timeout = (Number(device.expires_in) || 1800) * 1000;
             var started = Date.now();
 
             function pollCredentials() {
@@ -187,18 +193,18 @@
                     ));
                 }
 
-                return postForm(
-                    proxyUrl(OAUTH + 'device/credentials'),
-                    {
-                        client_id: PUBLIC_CLIENT_ID,
-                        code: device.device_code
-                    }
-                ).catch(function (error) {
-                    if (/HTTP 400|authorization_pending|slow_down/i.test(
+                var credentialsUrl = OAUTH +
+                    'device/credentials?client_id=' +
+                    encodeURIComponent(PUBLIC_CLIENT_ID) +
+                    '&code=' + encodeURIComponent(device.device_code);
+
+                return request(proxyUrl(credentialsUrl)).catch(function (error) {
+                    if (/HTTP (400|403|404)|authorization_pending|slow_down/i.test(
                         error.message
                     )) {
                         return delay(interval).then(pollCredentials);
                     }
+
                     throw error;
                 });
             }
@@ -237,7 +243,11 @@
                             'RD подключён: ' +
                             (user.username || user.email || user.id || 'OK')
                         );
-                        return { auth: auth, user: user };
+
+                        return {
+                            auth: auth,
+                            user: user
+                        };
                     });
                 });
             });
@@ -273,6 +283,7 @@
             var hash = value.match(/\b[a-f0-9]{40}\b/i);
             if (hash) return hash[0].toLowerCase();
         }
+
         return '';
     }
 
@@ -332,7 +343,10 @@
                 });
             });
         }, Promise.resolve()).then(function () {
-            return { items: results, errors: errors };
+            return {
+                items: results,
+                errors: errors
+            };
         });
     }
 
@@ -369,6 +383,7 @@
 
         hashes.forEach(function (hash) {
             hash = normalizeHash(hash);
+
             if (hash && !seen[hash]) {
                 seen[hash] = true;
                 unique.push(hash);
