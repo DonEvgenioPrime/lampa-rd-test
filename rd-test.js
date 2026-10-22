@@ -2,7 +2,7 @@
     'use strict';
 
     var PLUGIN_NAME = 'Real-Debrid Bridge';
-    var PLUGIN_VERSION = '1.1.4-test';
+    var PLUGIN_VERSION = '1.1.5-test';
     var COMPONENT = 'rd_bridge';
     var PROXY = 'https://lampa-rd-proxy.evgeniy4450.workers.dev/';
     var RD_API = 'https://api.real-debrid.com/rest/1.0/';
@@ -152,6 +152,89 @@
         });
     }
 
+    function showDeviceAuth(url, code) {
+        var previous = document.getElementById('rd-device-auth');
+        if (previous) previous.remove();
+
+        var overlay = document.createElement('div');
+        overlay.id = 'rd-device-auth';
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:100000;' +
+            'display:flex;align-items:center;justify-content:center;' +
+            'padding:24px;background:rgba(0,0,0,.88);color:#fff;' +
+            'font-family:Arial,sans-serif;box-sizing:border-box;';
+
+        var panel = document.createElement('div');
+        panel.style.cssText = 'width:100%;max-width:620px;text-align:center;';
+
+        var title = document.createElement('div');
+        title.textContent = 'Подключение Real-Debrid';
+        title.style.cssText = 'font-size:clamp(24px,5vw,38px);font-weight:bold;margin-bottom:28px;';
+
+        var instruction = document.createElement('div');
+        instruction.textContent = '1. Открой официальный сайт и введи этот код';
+        instruction.style.cssText = 'font-size:clamp(17px,3vw,25px);margin-bottom:16px;';
+
+        var codeBox = document.createElement('div');
+        codeBox.textContent = code || 'Код недоступен';
+        codeBox.style.cssText = 'padding:20px 12px;margin:0 0 22px;border-radius:16px;' +
+            'background:#252525;color:#fff;font-size:clamp(30px,7vw,48px);' +
+            'font-weight:bold;letter-spacing:3px;user-select:text;-webkit-user-select:text;';
+
+        var buttonStyle = 'display:block;margin:12px auto;padding:16px 24px;' +
+            'border:0;border-radius:14px;background:#eee;color:#0784ff;' +
+            'font-size:clamp(18px,3.5vw,27px);cursor:pointer;';
+
+        var copy = document.createElement('button');
+        copy.textContent = 'Копировать код';
+        copy.style.cssText = buttonStyle;
+        copy.onclick = function () {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(String(code || '')).then(function () {
+                    status.textContent = 'Код скопирован. Введи его на сайте Real-Debrid.';
+                }).catch(function () {
+                    status.textContent = 'Нажми и удерживай код, чтобы скопировать его.';
+                });
+            } else {
+                status.textContent = 'Нажми и удерживай код, чтобы скопировать его.';
+            }
+        };
+
+        var open = document.createElement('button');
+        open.textContent = 'Открыть Real-Debrid';
+        open.style.cssText = buttonStyle;
+        open.onclick = function () {
+            var win = window.open(url || 'https://real-debrid.com/device', '_blank');
+            if (!win) window.location.href = url || 'https://real-debrid.com/device';
+        };
+
+        var instruction2 = document.createElement('div');
+        instruction2.textContent = '2. Подтверди устройство на сайте';
+        instruction2.style.cssText = 'font-size:clamp(17px,3vw,25px);margin:36px 0 22px;';
+
+        var status = document.createElement('div');
+        status.textContent = 'Ожидаем подтверждения на сайте Real-Debrid…';
+        status.style.cssText = 'font-size:clamp(17px,3vw,25px);margin:20px 0 40px;overflow-wrap:anywhere;';
+
+        var close = document.createElement('button');
+        close.textContent = 'Закрыть';
+        close.style.cssText = buttonStyle;
+        close.onclick = function () { overlay.remove(); };
+
+        var note = document.createElement('div');
+        note.textContent = 'Вводи пароль только на официальном сайте Real-Debrid.';
+        note.style.cssText = 'font-size:16px;color:#aaa;margin-top:26px;';
+
+        [title, instruction, codeBox, copy, open, instruction2, status, close, note]
+            .forEach(function (element) { panel.appendChild(element); });
+        overlay.appendChild(panel);
+        document.body.appendChild(overlay);
+
+        return {
+            setStatus: function (message) { status.textContent = message; },
+            close: function () { overlay.remove(); }
+        };
+    }
+
     /*
      * Авторизация по коду устройства.
      * device/code и device/credentials вызываются через GET с query-параметрами;
@@ -173,11 +256,7 @@
             var url = device.verification_url ||
                 'https://real-debrid.com/device';
 
-            notify(
-                'Открой страницу авторизации RD:\n' + url +
-                '\n\nКод: ' + (device.user_code || '') +
-                '\n\nПосле подтверждения вернись в Lampa.'
-            );
+            var authWindow = showDeviceAuth(url, device.user_code || '');
 
             var interval = Math.max(
                 5, Number(device.interval) || 5
@@ -238,6 +317,7 @@
                     };
 
                     saveAuth(auth);
+                    authWindow.setStatus('Устройство подтверждено! Real-Debrid подключён.');
 
                     return profile(auth.access_token).then(function (user) {
                         notify(
