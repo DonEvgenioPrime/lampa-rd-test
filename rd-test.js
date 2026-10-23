@@ -187,17 +187,49 @@
         var copy = document.createElement('button');
         copy.textContent = 'Копировать код';
         copy.style.cssText = buttonStyle;
+
         copy.onclick = function () {
+            var value = String(code || '');
+
+            if (!value) {
+                status.textContent = 'Код не найден.';
+                return;
+            }
+
             if (navigator.clipboard && navigator.clipboard.writeText) {
-                navigator.clipboard.writeText(String(code || '')).then(function () {
-                    status.textContent = 'Код скопирован. Введи его на сайте Real-Debrid.';
+                navigator.clipboard.writeText(value).then(function () {
+                    status.textContent =
+                        'Код скопирован. Введи его на сайте Real-Debrid.';
                 }).catch(function () {
-                    status.textContent = 'Нажми и удерживай код, чтобы скопировать его.';
+                    fallbackCopy(value);
                 });
             } else {
-                status.textContent = 'Нажми и удерживай код, чтобы скопировать его.';
+                fallbackCopy(value);
             }
         };
+
+        function fallbackCopy(value) {
+            var input = document.createElement('textarea');
+            input.value = value;
+            input.style.position = 'fixed';
+            input.style.opacity = '0';
+            document.body.appendChild(input);
+            input.focus();
+            input.select();
+            input.setSelectionRange(0, input.value.length);
+
+            try {
+                var success = document.execCommand('copy');
+
+                status.textContent = success
+                    ? 'Попытка копирования выполнена. Если не скопировалось, выдели код вручную.'
+                    : 'Выдели и скопируй код вручную.';
+            } catch (e) {
+                status.textContent = 'Выдели и скопируй код вручную.';
+            }
+
+            input.remove();
+        }
 
         var open = document.createElement('button');
         open.textContent = 'Открыть Real-Debrid';
