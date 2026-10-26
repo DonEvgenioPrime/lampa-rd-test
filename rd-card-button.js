@@ -7,7 +7,10 @@ window.__rd_card_button_search = true;
 var PROXY_STORE = 'rd_bridge_worker_url_v1';
 var RD = 'https://api.real-debrid.com/rest/1.0/';
 var STORE = 'rd_bridge_oauth_v2';
-var PARSERS = ['https://jr.maxvol.pro'];
+var PARSERS = [
+  'https://jr.maxvol.pro',
+  'https://jac.red'
+];
 var SORT_STORE = 'rd_card_button_sort_v1';
 
 var SORT_OPTIONS = [
@@ -279,12 +282,23 @@ function parseDateValue(value) {
   return isNaN(parsed) ? 0 : parsed;
 }
 
-/* Поиск принимает токен RD для проверки Worker. */
+/*
+ * Поиск принимает токен RD для проверки Worker.
+ * Для JacRed используем рабочий endpoint без Category и с пустым apikey.
+ */
 function search(host, q, access) {
-  var url = host +
-    '/api/v2.0/indexers/all/results?Query=' +
-    encodeURIComponent(q) +
-    '&Category=2000,5000';
+  var url;
+
+  if (host.indexOf('jac.red') !== -1) {
+    url = host +
+      '/api/v2.0/indexers/all/results?apikey=&Query=' +
+      encodeURIComponent(q);
+  } else {
+    url = host +
+      '/api/v2.0/indexers/all/results?Query=' +
+      encodeURIComponent(q) +
+      '&Category=2000,5000';
+  }
 
   return req(url, access).then(function (data) {
     var list = Array.isArray(data)
