@@ -2,7 +2,7 @@
     'use strict';
 
     var PLUGIN_NAME = 'Real-Debrid Bridge';
-    var PLUGIN_VERSION = '1.1.8';
+    var PLUGIN_VERSION = '1.1.9';
     var COMPONENT = 'rd_bridge';
     var PROXY_STORE = 'rd_bridge_worker_url_v1';
     var RD_API = 'https://api.real-debrid.com/rest/1.0/';
@@ -119,12 +119,6 @@
         return false;
     }
 
-    /*
-     * Исправлено:
-     * - непустой URL сохраняется;
-     * - пустое поле удаляет URL;
-     * - отмена ничего не меняет.
-     */
     function askProxyUrl() {
         var current = getProxyUrl();
 
@@ -554,22 +548,37 @@
     }
 
     /*
-     * Запросы парсеров идут через общий Worker.
-     * Используем имена параметров из исходного TorBox-плагина.
+     * JacRed:
+     * - передаём пустой apikey=;
+     * - не передаём Category на первом тесте.
+     *
+     * MaxVol и jacred.xyz сохраняют прежние параметры.
      */
     function parserSearch(parser, query, originalTitle, year) {
         var title = String(query || '').trim();
         var original = String(originalTitle || '').trim();
         var searchYear = String(year || '').trim().slice(0, 4);
+        var isJacRed = parser.url === 'jac.red';
 
         var params = new URLSearchParams();
+
         params.set('Query', (title + ' ' + searchYear).trim());
         params.set('title', title);
         params.set('title_original', original);
-        params.set('Category', '2000,5000');
 
-        if (searchYear) params.set('year', searchYear);
-        if (parser.key) params.set('apikey', parser.key);
+        if (isJacRed) {
+            params.set('apikey', '');
+        } else {
+            params.set('Category', '2000,5000');
+
+            if (parser.key) {
+                params.set('apikey', parser.key);
+            }
+        }
+
+        if (searchYear) {
+            params.set('year', searchYear);
+        }
 
         var url = 'https://' + parser.url +
             '/api/v2.0/indexers/all/results?' + params.toString();
