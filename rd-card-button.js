@@ -283,13 +283,15 @@ function parseDateValue(value) {
 }
 
 /*
- * Поиск принимает токен RD для проверки Worker.
- * Для JacRed используем рабочий endpoint без Category и с пустым apikey.
+ * Поиск через MaxVol и JacRed.
+ * Для каждого результата сохраняем источник.
  */
 function search(host, q, access) {
+  var isJacRed = host.indexOf('jac.red') !== -1;
+  var source = isJacRed ? 'JacRed' : 'MaxVol';
   var url;
 
-  if (host.indexOf('jac.red') !== -1) {
+  if (isJacRed) {
     url = host +
       '/api/v2.0/indexers/all/results?apikey=&Query=' +
       encodeURIComponent(q);
@@ -329,6 +331,8 @@ function search(host, q, access) {
         seeders: Number(rawSeeders) || 0,
         leechers: Number(rawLeechers) || 0,
         tracker: x.Tracker || x.tracker || '',
+        source: source,
+        sources: [source],
         dateAdded: parseDateValue(rawDate),
         raw: x
       };
@@ -912,6 +916,13 @@ function renderCards(screen) {
 
       if (item.size) bits.push(formatSize(item.size));
       bits.push('Сиды: ' + item.seeders);
+
+      // Источник поиска: MaxVol, JacRed или оба парсера.
+      bits.push(
+        'Источник: ' +
+        (item.sources || [item.source || 'Неизвестен']).join(' + ')
+      );
+
       if (item.tracker) bits.push(item.tracker);
 
       if (item.dateAdded) {
@@ -1101,11 +1112,32 @@ function openSearch(query, movie) {
     var seen = {};
     var all = [];
 
+    /*
+     * Объединяем одинаковые хэши.
+     * Если раздачу нашли оба парсера, сохраняем оба источника.
+     */
     groups.forEach(function (group) {
       group.forEach(function (item) {
         if (!seen[item.hash]) {
-          seen[item.hash] = true;
+          seen[item.hash] = item;
           all.push(item);
+        } else {
+          var existing = seen[item.hash];
+
+          if (!Array.isArray(existing.sources)) {
+            existing.sources = [existing.source || 'Неизвестен'];
+          }
+
+          (item.sources || [item.source]).forEach(function (source) {
+            if (
+              source &&
+              existing.sources.indexOf(source) === -1
+            ) {
+              existing.sources.push(source);
+            }
+          });
+
+          existing.source = existing.sources.join(' + ');
         }
       });
     });
