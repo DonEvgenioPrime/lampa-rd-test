@@ -1,10 +1,11 @@
+
 (function () {
 'use strict';
 
 if (window.__rd_card_button_search) return;
 window.__rd_card_button_search = true;
 
-var PROXY = 'https://lampa-rd-proxy.evgeniy4450.workers.dev/';
+var PROXY_STORE = 'rd_bridge_worker_url_v1';
 var RD = 'https://api.real-debrid.com/rest/1.0/';
 var STORE = 'rd_bridge_oauth_v2';
 var PARSERS = ['https://jr.maxvol.pro'];
@@ -16,6 +17,38 @@ var SORT_OPTIONS = [
   { value: 'size_asc', label: 'По размеру (возр.)' },
   { value: 'date', label: 'По дате добавления' }
 ];
+
+/*
+ * Получение URL Worker из общей настройки.
+ * Тот же ключ используется основным плагином rd-test.js.
+ */
+function getProxyUrl() {
+  try {
+    var value = (localStorage.getItem(PROXY_STORE) || '').trim();
+
+    if (!value) return '';
+
+    var url = new URL(value);
+
+    if (url.protocol !== 'https:') return '';
+
+    return url.href.replace(/\/+$/, '') + '/';
+  } catch (e) {
+    return '';
+  }
+}
+
+function requireProxy() {
+  var proxy = getProxyUrl();
+
+  if (!proxy) {
+    throw new Error(
+      'Сначала укажи URL своего Cloudflare Worker в настройках Real-Debrid.'
+    );
+  }
+
+  return proxy;
+}
 
 function token() {
   try {
@@ -84,8 +117,16 @@ function req(url, access, options) {
 
   if (access) headers.Authorization = 'Bearer ' + access;
 
+  var proxy;
+
+  try {
+    proxy = requireProxy();
+  } catch (e) {
+    return Promise.reject(e);
+  }
+
   return fetch(
-    PROXY + '?url=' + encodeURIComponent(url),
+    proxy + '?url=' + encodeURIComponent(url),
     {
       method: options.method || 'GET',
       headers: headers,
@@ -239,14 +280,13 @@ function parseDateValue(value) {
   return isNaN(parsed) ? 0 : parsed;
 }
 
-/* Изменение 1: поиск принимает токен RD. */
+/* Поиск принимает токен RD для проверки Worker. */
 function search(host, q, access) {
   var url = host +
     '/api/v2.0/indexers/all/results?Query=' +
     encodeURIComponent(q) +
     '&Category=2000,5000';
 
-  /* Изменение 2: передаём токен в req для проверки Worker. */
   return req(url, access).then(function (data) {
     var list = Array.isArray(data)
       ? data
@@ -340,7 +380,15 @@ function checkDMM(imdbId, hashes, access) {
     return Promise.reject(new Error('Нет хэшей для проверки'));
   }
 
-  return fetch(PROXY + '?action=dmm-availability', {
+  var proxy;
+
+  try {
+    proxy = requireProxy();
+  } catch (e) {
+    return Promise.reject(e);
+  }
+
+  return fetch(proxy + '?action=dmm-availability', {
     method: 'POST',
     headers: {
       Authorization: 'Bearer ' + access,
@@ -437,10 +485,19 @@ function getRDUserId(screen, button) {
     return;
   }
 
+  var proxy;
+
+  try {
+    proxy = requireProxy();
+  } catch (e) {
+    note(e.message);
+    return;
+  }
+
   button.disabled = true;
   button.textContent = 'Получаем ID…';
 
-  fetch(PROXY + '?action=rd-user-id', {
+  fetch(proxy + '?action=rd-user-id', {
     method: 'GET',
     headers: {
       Accept: 'application/json',
@@ -942,6 +999,14 @@ function openSearch(query, movie) {
     return;
   }
 
+  // Проверяем настройку до запуска поиска.
+  try {
+    requireProxy();
+  } catch (e) {
+    note(e.message);
+    return;
+  }
+
   var imdbId = getImdbId(movie);
   var old = document.getElementById('rd-card-search');
 
@@ -1008,7 +1073,6 @@ function openSearch(query, movie) {
   var parserCounts = {};
   var parserErrors = [];
 
-  /* Изменение 3: передаём токен в поиск парсера. */
   Promise.all(PARSERS.map(function (host) {
     return search(host, query, access).then(function (rows) {
       parserCounts[host] = rows.length;
