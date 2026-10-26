@@ -1,8 +1,9 @@
+
 (function () {
     'use strict';
 
     var PLUGIN_NAME = 'Real-Debrid Bridge';
-    var PLUGIN_VERSION = '1.1.9';
+    var PLUGIN_VERSION = '1.2.0';
     var COMPONENT = 'rd_bridge';
     var PROXY_STORE = 'rd_bridge_worker_url_v1';
     var RD_API = 'https://api.real-debrid.com/rest/1.0/';
@@ -10,10 +11,10 @@
     var PUBLIC_CLIENT_ID = 'X245A4XAIBGVM';
     var STORE = 'rd_bridge_oauth_v2';
 
+    // Старый адрес JacRed удалён.
     var PARSERS = [
         { name: 'MaxVol', url: 'jr.maxvol.pro', key: '' },
-        { name: 'JacRed', url: 'jac.red', key: '' },
-        { name: 'JacRed (старый адрес)', url: 'jacred.xyz', key: '' }
+        { name: 'JacRed', url: 'jac.red', key: '' }
     ];
 
     var MAX_HASH_CHECKS = 10;
@@ -166,11 +167,13 @@
                 if (!response.ok) {
                     throw new Error(
                         'HTTP ' + response.status + ': ' +
-                        (data.error_description ||
+                        (
+                            data.error_description ||
                             data.error ||
                             data.message ||
                             response.statusText ||
-                            'Неизвестная ошибка')
+                            'Неизвестная ошибка'
+                        )
                     );
                 }
 
@@ -519,40 +522,128 @@
         return String(value || '').trim().toLowerCase();
     }
 
+    function getField(item, names) {
+        if (!item || typeof item !== 'object') return '';
+
+        var keys = Object.keys(item);
+
+        for (var i = 0; i < names.length; i++) {
+            var wanted = names[i].toLowerCase();
+
+            for (var j = 0; j < keys.length; j++) {
+                if (keys[j].toLowerCase() === wanted) {
+                    var value = item[keys[j]];
+
+                    if (
+                        value !== undefined &&
+                        value !== null &&
+                        typeof value !== 'object'
+                    ) {
+                        var text = String(value).trim();
+                        if (text) return text;
+                    }
+                }
+            }
+        }
+
+        return '';
+    }
+
     function extractHash(item) {
         if (!item) return '';
 
+        var hashFields = [
+            'hash',
+            'info_hash',
+            'infoHash',
+            'InfoHash',
+            'torrent_hash',
+            'torrentHash',
+            'btih',
+            'infohash'
+        ];
+
+        var direct = getField(item, hashFields);
+
         var values = [
-            item.hash,
-            item.info_hash,
-            item.infoHash,
-            item.torrent_hash,
-            item.magnet
+            direct,
+            getField(item, [
+                'magnet',
+                'magnetUri',
+                'magnet_uri',
+                'MagnetUri',
+                'link',
+                'Link',
+                'download',
+                'Download'
+            ])
         ];
 
         for (var i = 0; i < values.length; i++) {
             var value = String(values[i] || '');
+
+            // BitTorrent v1 hash in a magnet link.
             var magnet = value.match(/btih:([a-f0-9]{40})/i);
             if (magnet) return magnet[1].toLowerCase();
 
+            // A standalone 40-character hexadecimal hash.
             var hash = value.match(/\b[a-f0-9]{40}\b/i);
             if (hash) return hash[0].toLowerCase();
+
+            // Base32-encoded BTIH hash in magnet links.
+            var base32 = value.match(/btih:([a-z2-7]{32})/i);
+
+            if (base32) {
+                var alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+                var bits = '';
+                var encoded = base32[1].toUpperCase();
+
+                for (var b = 0; b < encoded.length; b++) {
+                    var digit = alphabet.indexOf(encoded.charAt(b));
+                    if (digit < 0) {
+                        bits = '';
+                        break;
+                    }
+
+                    bits += digit.toString(2).padStart(5, '0');
+                }
+
+                if (bits.length >= 160) {
+                    var hex = '';
+
+                    for (var h = 0; h < 160; h += 4) {
+                        hex += parseInt(bits.slice(h, h + 4), 2)
+                            .toString(16);
+                    }
+
+                    if (/^[a-f0-9]{40}$/.test(hex)) {
+                        return hex.toLowerCase();
+                    }
+                }
+            }
         }
 
         return '';
     }
 
     function extractTitle(item) {
-        return item.title || item.name || item.release ||
-            item.original_title || 'Без названия';
+        return getField(item, [
+            'title',
+            'name',
+            'release',
+            'original_title',
+            'originalTitle',
+            'Title',
+            'Name'
+        ]) || 'Без названия';
     }
 
     /*
      * JacRed:
-     * - передаём пустой apikey=;
-     * - не передаём Category на первом тесте.
+     * - пустой apikey=;
+     * - без Category, как в успешном прямом тесте.
      *
-     * MaxVol и jacred.xyz сохраняют прежние параметры.
+     * MaxVol сохраняет прежние параметры.
      */
     function parserSearch(parser, query, originalTitle, year) {
         var title = String(query || '').trim();
@@ -1083,7 +1174,7 @@
             addButton(
                 'rd_search_cached_v1',
                 'Поиск закэшированных раздач',
-                'Поиск на MaxVol и двух адресах JacRed с проверкой кэша RD',
+                'Поиск на MaxVol и JacRed с проверкой кэша RD',
                 function () {
                     openPanel();
                 }
