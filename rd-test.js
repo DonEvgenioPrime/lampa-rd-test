@@ -2,7 +2,7 @@
     'use strict';
 
     var PLUGIN_NAME = 'Real-Debrid Bridge';
-    var PLUGIN_VERSION = '1.1.7';
+    var PLUGIN_VERSION = '1.1.8';
     var COMPONENT = 'rd_bridge';
     var PROXY_STORE = 'rd_bridge_worker_url_v1';
     var RD_API = 'https://api.real-debrid.com/rest/1.0/';
@@ -119,14 +119,36 @@
         return false;
     }
 
+    /*
+     * Исправлено:
+     * - непустой URL сохраняется;
+     * - пустое поле удаляет URL;
+     * - отмена ничего не меняет.
+     */
     function askProxyUrl() {
         var current = getProxyUrl();
+
         var value = window.prompt(
-            'Введи базовый HTTPS URL своего Cloudflare Worker:',
+            'URL Cloudflare Worker (HTTPS).\n' +
+            'Для удаления адреса очисти поле и нажми ОК.',
             current
         );
 
         if (value === null) return;
+
+        if (!value.trim()) {
+            try {
+                localStorage.removeItem(PROXY_STORE);
+                notify(
+                    'URL Worker удалён. Для дальнейшей работы ' +
+                    'плагинов потребуется настроить его заново.'
+                );
+            } catch (e) {
+                notify('Не удалось удалить URL Worker: ' + e.message);
+            }
+
+            return;
+        }
 
         try {
             saveProxyUrl(value);
@@ -283,45 +305,38 @@
         panel.style.cssText =
             'width:100%;max-width:620px;text-align:center;';
 
-        function makeText(tag, text, css) {
-            var element = document.createElement(tag);
-            element.textContent = text;
-            element.style.cssText = css;
-            return element;
-        }
+        var title = document.createElement('div');
+        title.textContent = 'Подключение Real-Debrid';
+        title.style.cssText =
+            'font-size:clamp(24px,5vw,38px);font-weight:bold;margin-bottom:28px;';
 
-        var title = makeText(
-            'div',
-            'Подключение Real-Debrid',
-            'font-size:clamp(24px,5vw,38px);font-weight:bold;margin-bottom:28px;'
-        );
+        var instruction = document.createElement('div');
+        instruction.textContent =
+            '1. Открой официальный сайт и введи этот код';
+        instruction.style.cssText =
+            'font-size:clamp(17px,3vw,25px);margin-bottom:16px;';
 
-        var instruction = makeText(
-            'div',
-            '1. Открой официальный сайт и введи этот код',
-            'font-size:clamp(17px,3vw,25px);margin-bottom:16px;'
-        );
-
-        var codeBox = makeText(
-            'div',
-            code || 'Код недоступен',
+        var codeBox = document.createElement('div');
+        codeBox.textContent = code || 'Код недоступен';
+        codeBox.style.cssText =
             'padding:20px 12px;margin:0 0 22px;border-radius:16px;' +
             'background:#252525;color:#fff;font-size:clamp(30px,7vw,48px);' +
-            'font-weight:bold;letter-spacing:3px;user-select:text;'
-        );
+            'font-weight:bold;letter-spacing:3px;user-select:text;';
 
         var buttonStyle =
             'display:block;margin:12px auto;padding:16px 24px;' +
             'border:0;border-radius:14px;background:#eee;color:#0784ff;' +
             'font-size:clamp(18px,3.5vw,27px);cursor:pointer;';
 
-        var status = makeText(
-            'div',
-            'Ожидаем подтверждения на сайте Real-Debrid…',
-            'font-size:clamp(17px,3vw,25px);margin:20px 0 40px;overflow-wrap:anywhere;'
-        );
+        var status = document.createElement('div');
+        status.textContent =
+            'Ожидаем подтверждения на сайте Real-Debrid…';
+        status.style.cssText =
+            'font-size:clamp(17px,3vw,25px);margin:20px 0 40px;overflow-wrap:anywhere;';
 
-        var copy = makeText('button', 'Копировать код', buttonStyle);
+        var copy = document.createElement('button');
+        copy.textContent = 'Копировать код';
+        copy.style.cssText = buttonStyle;
 
         function fallbackCopy(value) {
             var input = document.createElement('textarea');
@@ -363,29 +378,33 @@
             }
         };
 
-        var open = makeText('button', 'Открыть Real-Debrid', buttonStyle);
+        var open = document.createElement('button');
+        open.textContent = 'Открыть Real-Debrid';
+        open.style.cssText = buttonStyle;
         open.onclick = function () {
             var target = url || 'https://real-debrid.com/device';
             var win = window.open(target, '_blank');
             if (!win) window.location.href = target;
         };
 
-        var instruction2 = makeText(
-            'div',
-            '2. Подтверди устройство на сайте',
-            'font-size:clamp(17px,3vw,25px);margin:36px 0 22px;'
-        );
+        var instruction2 = document.createElement('div');
+        instruction2.textContent =
+            '2. Подтверди устройство на сайте';
+        instruction2.style.cssText =
+            'font-size:clamp(17px,3vw,25px);margin:36px 0 22px;';
 
-        var close = makeText('button', 'Закрыть', buttonStyle);
+        var close = document.createElement('button');
+        close.textContent = 'Закрыть';
+        close.style.cssText = buttonStyle;
         close.onclick = function () {
             overlay.remove();
         };
 
-        var note = makeText(
-            'div',
-            'Вводи пароль только на официальном сайте Real-Debrid.',
-            'font-size:16px;color:#aaa;margin-top:26px;'
-        );
+        var note = document.createElement('div');
+        note.textContent =
+            'Вводи пароль только на официальном сайте Real-Debrid.';
+        note.style.cssText =
+            'font-size:16px;color:#aaa;margin-top:26px;';
 
         [
             title, instruction, codeBox, copy, open,
@@ -479,7 +498,6 @@
                     };
 
                     saveAuth(auth);
-
                     authWindow.setStatus(
                         'Устройство подтверждено! Real-Debrid подключён.'
                     );
@@ -536,8 +554,8 @@
     }
 
     /*
-     * Проверяем API каждого парсера отдельно.
-     * Сохраняем совместимые имена параметров Query и Category.
+     * Запросы парсеров идут через общий Worker.
+     * Используем имена параметров из исходного TorBox-плагина.
      */
     function parserSearch(parser, query, originalTitle, year) {
         var title = String(query || '').trim();
@@ -1001,7 +1019,8 @@
             addButton(
                 'rd_worker_url_v1',
                 'Настроить Cloudflare Worker URL',
-                'Общий адрес Worker для rd-test.js и rd-card-button.js',
+                'Общий адрес Worker для rd-test.js и rd-card-button.js. ' +
+                'Пустое поле удаляет адрес.',
                 function () {
                     askProxyUrl();
                 }
@@ -1029,6 +1048,7 @@
 
                     getWorkingAuth().then(function (result) {
                         var user = result.user || {};
+
                         notify(
                             'RD работает: ' +
                             (user.username || user.email || user.id || 'OK')
@@ -1054,7 +1074,7 @@
             addButton(
                 'rd_search_cached_v1',
                 'Поиск закэшированных раздач',
-                'Поиск на MaxVol и JacRed с проверкой кэша RD',
+                'Поиск на MaxVol и двух адресах JacRed с проверкой кэша RD',
                 function () {
                     openPanel();
                 }
@@ -1068,6 +1088,7 @@
             );
         } catch (error) {
             SETTINGS_REGISTERED = false;
+
             console.error(
                 '[' + PLUGIN_NAME + '] Ошибка регистрации настроек:',
                 error
@@ -1091,6 +1112,7 @@
                 '] Не удалось зарегистрировать настройки. ' +
                 'Проверь доступность Lampa.SettingsApi.'
             );
+
             return;
         }
 
@@ -1119,10 +1141,12 @@
 
             if (SETTINGS_REGISTERED) {
                 stopInitRetry();
+
                 console.log(
                     '[' + PLUGIN_NAME + '] Инициализация завершена',
                     PLUGIN_VERSION
                 );
+
                 return;
             }
         }
