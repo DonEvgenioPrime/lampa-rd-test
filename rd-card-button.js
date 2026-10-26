@@ -7,10 +7,7 @@ window.__rd_card_button_search = true;
 var PROXY_STORE = 'rd_bridge_worker_url_v1';
 var RD = 'https://api.real-debrid.com/rest/1.0/';
 var STORE = 'rd_bridge_oauth_v2';
-var PARSERS = [
-  'https://jr.maxvol.pro',
-  'https://jac.red'
-];
+var PARSERS = ['https://jr.maxvol.pro', 'https://jac.red'];
 var SORT_STORE = 'rd_card_button_sort_v1';
 
 var SORT_OPTIONS = [
@@ -283,24 +280,19 @@ function parseDateValue(value) {
 }
 
 /*
- * Поиск через MaxVol и JacRed.
- * Для каждого результата сохраняем источник.
+ * Поиск на MaxVol и JacRed.
+ * Каждый результат получает имя источника, чтобы можно было объединить
+ * одинаковые хеши и показать оба источника в одной карточке.
  */
 function search(host, q, access) {
   var isJacRed = host.indexOf('jac.red') !== -1;
-  var source = isJacRed ? 'JacRed' : 'MaxVol';
-  var url;
+  var url = isJacRed
+    ? host + '/api/v2.0/indexers/all/results?apikey=&Query=' +
+      encodeURIComponent(q)
+    : host + '/api/v2.0/indexers/all/results?Query=' +
+      encodeURIComponent(q) + '&Category=2000,5000';
 
-  if (isJacRed) {
-    url = host +
-      '/api/v2.0/indexers/all/results?apikey=&Query=' +
-      encodeURIComponent(q);
-  } else {
-    url = host +
-      '/api/v2.0/indexers/all/results?Query=' +
-      encodeURIComponent(q) +
-      '&Category=2000,5000';
-  }
+  var sourceName = isJacRed ? 'JacRed' : 'MaxVol';
 
   return req(url, access).then(function (data) {
     var list = Array.isArray(data)
@@ -331,9 +323,9 @@ function search(host, q, access) {
         seeders: Number(rawSeeders) || 0,
         leechers: Number(rawLeechers) || 0,
         tracker: x.Tracker || x.tracker || '',
-        source: source,
-        sources: [source],
         dateAdded: parseDateValue(rawDate),
+        source: sourceName,
+        sources: [sourceName],
         raw: x
       };
 
@@ -436,13 +428,12 @@ function findHashResult(data, hash) {
 }
 
 /*
- * Зелёный статус ставим только при наличии непустого массива files.
- * Пустой массив и неизвестная структура ответа не подтверждают кеш.
+ * Кеш подтверждается только тогда, когда DMM вернул непустой массив files.
+ * Отсутствующий хеш или неполный ответ не считаются подтверждением
+ * ни наличия, ни отсутствия кеша.
  */
 function classifyCache(result) {
-  if (!result || typeof result !== 'object') {
-    return 'not-confirmed';
-  }
+  if (!result || typeof result !== 'object') return 'unknown';
 
   if (Array.isArray(result.files)) {
     return result.files.length > 0 ? 'cached' : 'unknown';
@@ -580,18 +571,20 @@ function runCacheCheck(items, imdbId, access, screen) {
       'Кеш не проверен: IMDb ID не найден в данных фильма.';
 
     items.forEach(function (item) {
-      item.cacheState = 'not-confirmed';
+      item.cacheState = 'unknown';
 
       var node = screen.querySelector(
         '[data-cache-hash="' + item.hash + '"]'
       );
 
       if (node) {
-        node.textContent = 'Не найден IMDb ID фильма';
+        node.textContent =
+          'Проверка кеша: DMM · не проверено — нет IMDb ID';
         node.style.color = '#ffc766';
       }
     });
 
+    renderCards(screen);
     return;
   }
 
@@ -644,8 +637,8 @@ function runCacheCheck(items, imdbId, access, screen) {
 
             if (node) {
               node.textContent =
-                '⚡ DMM: есть доступные файлы (' +
-                result.files.length + ')';
+                'Проверка кеша: DMM · подтверждён (' +
+                result.files.length + ' файлов)';
 
               node.style.color = '#72e6a2';
             }
@@ -653,7 +646,9 @@ function runCacheCheck(items, imdbId, access, screen) {
             notConfirmedCount++;
 
             if (node) {
-              node.textContent = 'Кеш DMM не подтверждён';
+              node.textContent =
+                'Проверка кеша: DMM · не подтверждён';
+
               node.style.color = '#ffc766';
             }
           } else {
@@ -661,7 +656,7 @@ function runCacheCheck(items, imdbId, access, screen) {
 
             if (node) {
               node.textContent =
-                'DMM не подтвердил доступные файлы';
+                'Проверка кеша: DMM · нет подтверждения';
 
               node.style.color = '#ffc766';
             }
@@ -680,7 +675,7 @@ function runCacheCheck(items, imdbId, access, screen) {
 
         if (node) {
           node.textContent =
-            'Кеш не подтверждён: ошибка проверки DMM';
+            'Проверка кеша: DMM · ошибка проверки (кеш не подтверждён)';
           node.style.color = '#ff8585';
         }
       });
@@ -916,13 +911,6 @@ function renderCards(screen) {
 
       if (item.size) bits.push(formatSize(item.size));
       bits.push('Сиды: ' + item.seeders);
-
-      // Источник поиска: MaxVol, JacRed или оба парсера.
-      bits.push(
-        'Источник: ' +
-        (item.sources || [item.source || 'Неизвестен']).join(' + ')
-      );
-
       if (item.tracker) bits.push(item.tracker);
 
       if (item.dateAdded) {
@@ -931,6 +919,14 @@ function renderCards(screen) {
 
       meta.textContent = bits.join(' · ');
       card.appendChild(meta);
+
+      var sourceLabel = document.createElement('div');
+      sourceLabel.setAttribute('data-source-label', '1');
+      sourceLabel.style.cssText = 'opacity:.9;font-size:.9em;margin-top:4px';
+      sourceLabel.textContent =
+        'Источник: ' +
+        (item.sources || [item.source || 'неизвестен']).join(' + ');
+      card.appendChild(sourceLabel);
 
       var diagDetails = document.createElement('details');
       diagDetails.style.cssText =
@@ -987,25 +983,36 @@ function renderCards(screen) {
       card.appendChild(result);
     }
 
+    var sourceLabel = card.querySelector('[data-source-label]');
+
+    if (sourceLabel) {
+      sourceLabel.textContent =
+        'Источник: ' +
+        (item.sources || [item.source || 'неизвестен']).join(' + ');
+    }
+
     var cacheLabel = card.querySelector('[data-cache-hash]');
 
     if (cacheLabel) {
       if (item.cacheState === 'cached') {
-        cacheLabel.textContent = '⚡ DMM: кеш подтверждён';
+        cacheLabel.textContent =
+          'Проверка кеша: DMM · кеш подтверждён';
         cacheLabel.style.color = '#72e6a2';
       } else if (item.cacheState === 'unknown') {
         cacheLabel.textContent =
-          'DMM не подтвердил доступные файлы';
+          'Проверка кеша: DMM · нет подтверждения';
         cacheLabel.style.color = '#ffc766';
       } else if (item.cacheState === 'error') {
         cacheLabel.textContent =
-          'Ошибка проверки DMM — кеш не подтверждён';
+          'Проверка кеша: DMM · ошибка (кеш не подтверждён)';
         cacheLabel.style.color = '#ff8585';
       } else if (item.cacheState === 'checking') {
-        cacheLabel.textContent = 'Проверяем DMM…';
+        cacheLabel.textContent =
+          'Проверка кеша: DMM · проверяем…';
         cacheLabel.style.color = '#ffc766';
       } else {
-        cacheLabel.textContent = 'Кеш DMM не подтверждён';
+        cacheLabel.textContent =
+          'Проверка кеша: DMM · не подтверждён';
         cacheLabel.style.color = '#ffc766';
       }
     }
@@ -1103,7 +1110,10 @@ function openSearch(query, movie) {
       return rows;
     }).catch(function (err) {
       parserCounts[host] = 0;
-      parserErrors.push(host + ': ' + err.message);
+      parserErrors.push(
+        (host.indexOf('jac.red') !== -1 ? 'JacRed' : 'MaxVol') +
+        ': ' + err.message
+      );
       return [];
     });
   })).then(function (groups) {
@@ -1112,32 +1122,57 @@ function openSearch(query, movie) {
     var seen = {};
     var all = [];
 
-    /*
-     * Объединяем одинаковые хэши.
-     * Если раздачу нашли оба парсера, сохраняем оба источника.
-     */
     groups.forEach(function (group) {
       group.forEach(function (item) {
-        if (!seen[item.hash]) {
-          seen[item.hash] = item;
+        var key = String(item.hash || '').toLowerCase();
+
+        if (!key) return;
+
+        if (!seen[key]) {
+          item.sources =
+            (item.sources || [item.source || 'неизвестен']).slice();
+
+          seen[key] = item;
           all.push(item);
         } else {
-          var existing = seen[item.hash];
+          var existing = seen[key];
+          var incomingSources =
+            item.sources || [item.source || 'неизвестен'];
 
-          if (!Array.isArray(existing.sources)) {
-            existing.sources = [existing.source || 'Неизвестен'];
-          }
-
-          (item.sources || [item.source]).forEach(function (source) {
-            if (
-              source &&
-              existing.sources.indexOf(source) === -1
-            ) {
+          incomingSources.forEach(function (source) {
+            if (existing.sources.indexOf(source) === -1) {
               existing.sources.push(source);
             }
           });
 
+          existing.sources.sort(function (a, b) {
+            var order = { MaxVol: 0, JacRed: 1 };
+
+            return (order[a] === undefined ? 99 : order[a]) -
+              (order[b] === undefined ? 99 : order[b]);
+          });
+
           existing.source = existing.sources.join(' + ');
+
+          if (!existing.magnet && item.magnet) {
+            existing.magnet = item.magnet;
+          }
+
+          if (!existing.tracker && item.tracker) {
+            existing.tracker = item.tracker;
+          }
+
+          if (item.seeders > existing.seeders) {
+            existing.seeders = item.seeders;
+          }
+
+          if (item.size > existing.size) {
+            existing.size = item.size;
+          }
+
+          if (item.dateAdded > existing.dateAdded) {
+            existing.dateAdded = item.dateAdded;
+          }
         }
       });
     });
@@ -1164,7 +1199,8 @@ function openSearch(query, movie) {
       'IMDb ID: ' + (imdbId || 'не найден в объекте фильма') +
       '\nРезультаты парсеров:\n' +
       PARSERS.map(function (p) {
-        return p + ': ' + (parserCounts[p] || 0) + ' релизов';
+        var name = p.indexOf('jac.red') !== -1 ? 'JacRed' : 'MaxVol';
+        return name + ': ' + (parserCounts[p] || 0) + ' релизов';
       }).join('\n') +
       (parserErrors.length ? '\nОшибки:\n' + parserErrors.join('\n') : '');
 
