@@ -2,7 +2,7 @@
     'use strict';
 
     var PLUGIN_NAME = 'Real-Debrid Bridge';
-    var PLUGIN_VERSION = '1.1.6';
+    var PLUGIN_VERSION = '1.1.7';
     var COMPONENT = 'rd_bridge';
     var PROXY_STORE = 'rd_bridge_worker_url_v1';
     var RD_API = 'https://api.real-debrid.com/rest/1.0/';
@@ -12,7 +12,8 @@
 
     var PARSERS = [
         { name: 'MaxVol', url: 'jr.maxvol.pro', key: '' },
-        { name: 'Jacred', url: 'jacred.xyz', key: '' }
+        { name: 'JacRed', url: 'jac.red', key: '' },
+        { name: 'JacRed (старый адрес)', url: 'jacred.xyz', key: '' }
     ];
 
     var MAX_HASH_CHECKS = 10;
@@ -31,14 +32,9 @@
         }
     }
 
-    /*
-     * Общая настройка Worker.
-     * Ключ совпадает с rd-card-button.js.
-     */
     function getProxyUrl() {
         try {
             var value = (localStorage.getItem(PROXY_STORE) || '').trim();
-
             if (!value) return '';
 
             var url = new URL(value);
@@ -125,7 +121,6 @@
 
     function askProxyUrl() {
         var current = getProxyUrl();
-
         var value = window.prompt(
             'Введи базовый HTTPS URL своего Cloudflare Worker:',
             current
@@ -274,7 +269,6 @@
 
     function showDeviceAuth(url, code) {
         var previous = document.getElementById('rd-device-auth');
-
         if (previous) previous.remove();
 
         var overlay = document.createElement('div');
@@ -289,41 +283,65 @@
         panel.style.cssText =
             'width:100%;max-width:620px;text-align:center;';
 
-        var title = document.createElement('div');
-        title.textContent = 'Подключение Real-Debrid';
-        title.style.cssText =
-            'font-size:clamp(24px,5vw,38px);font-weight:bold;' +
-            'margin-bottom:28px;';
+        function makeText(tag, text, css) {
+            var element = document.createElement(tag);
+            element.textContent = text;
+            element.style.cssText = css;
+            return element;
+        }
 
-        var instruction = document.createElement('div');
-        instruction.textContent =
-            '1. Открой официальный сайт и введи этот код';
-        instruction.style.cssText =
-            'font-size:clamp(17px,3vw,25px);margin-bottom:16px;';
+        var title = makeText(
+            'div',
+            'Подключение Real-Debrid',
+            'font-size:clamp(24px,5vw,38px);font-weight:bold;margin-bottom:28px;'
+        );
 
-        var codeBox = document.createElement('div');
-        codeBox.textContent = code || 'Код недоступен';
-        codeBox.style.cssText =
+        var instruction = makeText(
+            'div',
+            '1. Открой официальный сайт и введи этот код',
+            'font-size:clamp(17px,3vw,25px);margin-bottom:16px;'
+        );
+
+        var codeBox = makeText(
+            'div',
+            code || 'Код недоступен',
             'padding:20px 12px;margin:0 0 22px;border-radius:16px;' +
-            'background:#252525;color:#fff;' +
-            'font-size:clamp(30px,7vw,48px);font-weight:bold;' +
-            'letter-spacing:3px;user-select:text;-webkit-user-select:text;';
+            'background:#252525;color:#fff;font-size:clamp(30px,7vw,48px);' +
+            'font-weight:bold;letter-spacing:3px;user-select:text;'
+        );
 
         var buttonStyle =
             'display:block;margin:12px auto;padding:16px 24px;' +
             'border:0;border-radius:14px;background:#eee;color:#0784ff;' +
             'font-size:clamp(18px,3.5vw,27px);cursor:pointer;';
 
-        var status = document.createElement('div');
-        status.textContent =
-            'Ожидаем подтверждения на сайте Real-Debrid…';
-        status.style.cssText =
-            'font-size:clamp(17px,3vw,25px);margin:20px 0 40px;' +
-            'overflow-wrap:anywhere;';
+        var status = makeText(
+            'div',
+            'Ожидаем подтверждения на сайте Real-Debrid…',
+            'font-size:clamp(17px,3vw,25px);margin:20px 0 40px;overflow-wrap:anywhere;'
+        );
 
-        var copy = document.createElement('button');
-        copy.textContent = 'Копировать код';
-        copy.style.cssText = buttonStyle;
+        var copy = makeText('button', 'Копировать код', buttonStyle);
+
+        function fallbackCopy(value) {
+            var input = document.createElement('textarea');
+            input.value = value;
+            input.style.cssText = 'position:fixed;opacity:0;';
+            document.body.appendChild(input);
+            input.focus();
+            input.select();
+            input.setSelectionRange(0, input.value.length);
+
+            try {
+                status.textContent = document.execCommand('copy')
+                    ? 'Попытка копирования выполнена. Если не скопировалось, выдели код вручную.'
+                    : 'Выдели и скопируй код вручную.';
+            } catch (e) {
+                status.textContent = 'Выдели и скопируй код вручную.';
+            }
+
+            input.remove();
+        }
 
         copy.onclick = function () {
             var value = String(code || '');
@@ -345,59 +363,29 @@
             }
         };
 
-        function fallbackCopy(value) {
-            var input = document.createElement('textarea');
-            input.value = value;
-            input.style.position = 'fixed';
-            input.style.opacity = '0';
-
-            document.body.appendChild(input);
-            input.focus();
-            input.select();
-            input.setSelectionRange(0, input.value.length);
-
-            try {
-                var success = document.execCommand('copy');
-
-                status.textContent = success
-                    ? 'Попытка копирования выполнена. Если не скопировалось, выдели код вручную.'
-                    : 'Выдели и скопируй код вручную.';
-            } catch (e) {
-                status.textContent = 'Выдели и скопируй код вручную.';
-            }
-
-            input.remove();
-        }
-
-        var open = document.createElement('button');
-        open.textContent = 'Открыть Real-Debrid';
-        open.style.cssText = buttonStyle;
-
+        var open = makeText('button', 'Открыть Real-Debrid', buttonStyle);
         open.onclick = function () {
             var target = url || 'https://real-debrid.com/device';
             var win = window.open(target, '_blank');
-
             if (!win) window.location.href = target;
         };
 
-        var instruction2 = document.createElement('div');
-        instruction2.textContent =
-            '2. Подтверди устройство на сайте';
-        instruction2.style.cssText =
-            'font-size:clamp(17px,3vw,25px);margin:36px 0 22px;';
+        var instruction2 = makeText(
+            'div',
+            '2. Подтверди устройство на сайте',
+            'font-size:clamp(17px,3vw,25px);margin:36px 0 22px;'
+        );
 
-        var close = document.createElement('button');
-        close.textContent = 'Закрыть';
-        close.style.cssText = buttonStyle;
+        var close = makeText('button', 'Закрыть', buttonStyle);
         close.onclick = function () {
             overlay.remove();
         };
 
-        var note = document.createElement('div');
-        note.textContent =
-            'Вводи пароль только на официальном сайте Real-Debrid.';
-        note.style.cssText =
-            'font-size:16px;color:#aaa;margin-top:26px;';
+        var note = makeText(
+            'div',
+            'Вводи пароль только на официальном сайте Real-Debrid.',
+            'font-size:16px;color:#aaa;margin-top:26px;'
+        );
 
         [
             title, instruction, codeBox, copy, open,
@@ -419,11 +407,6 @@
         };
     }
 
-    /*
-     * Авторизация по коду устройства.
-     * Запросы device/code и device/credentials выполняются через GET.
-     * Обмен кода на токен и обновление токена выполняются через POST.
-     */
     function connectAuth() {
         var deviceParams = new URLSearchParams();
         deviceParams.set('client_id', PUBLIC_CLIENT_ID);
@@ -441,11 +424,7 @@
                 'https://real-debrid.com/device';
 
             var authWindow = showDeviceAuth(url, device.user_code || '');
-
-            var interval = Math.max(
-                5, Number(device.interval) || 5
-            ) * 1000;
-
+            var interval = Math.max(5, Number(device.interval) || 5) * 1000;
             var timeout = (Number(device.expires_in) || 1800) * 1000;
             var started = Date.now();
 
@@ -456,15 +435,12 @@
                     ));
                 }
 
-                var credentialsParams = new URLSearchParams();
-                credentialsParams.set('client_id', PUBLIC_CLIENT_ID);
-                credentialsParams.set('code', device.device_code);
+                var params = new URLSearchParams();
+                params.set('client_id', PUBLIC_CLIENT_ID);
+                params.set('code', device.device_code);
 
                 return request(
-                    proxyUrl(
-                        OAUTH + 'device/credentials?' +
-                        credentialsParams.toString()
-                    ),
+                    proxyUrl(OAUTH + 'device/credentials?' + params.toString()),
                     { method: 'GET' }
                 ).catch(function (error) {
                     if (
@@ -480,9 +456,7 @@
 
             return pollCredentials().then(function (credentials) {
                 if (!credentials.client_id || !credentials.client_secret) {
-                    throw new Error(
-                        'RD не вернул client_id/client_secret.'
-                    );
+                    throw new Error('RD не вернул client_id/client_secret.');
                 }
 
                 return postForm(proxyUrl(OAUTH + 'token'), {
@@ -547,11 +521,9 @@
         for (var i = 0; i < values.length; i++) {
             var value = String(values[i] || '');
             var magnet = value.match(/btih:([a-f0-9]{40})/i);
-
             if (magnet) return magnet[1].toLowerCase();
 
             var hash = value.match(/\b[a-f0-9]{40}\b/i);
-
             if (hash) return hash[0].toLowerCase();
         }
 
@@ -564,57 +536,85 @@
     }
 
     /*
-     * Поиск через API Jackett-совместимых публичных индексаторов.
+     * Проверяем API каждого парсера отдельно.
+     * Сохраняем совместимые имена параметров Query и Category.
      */
     function parserSearch(parser, query, originalTitle, year) {
         var title = String(query || '').trim();
         var original = String(originalTitle || '').trim();
         var searchYear = String(year || '').trim().slice(0, 4);
-        var queryBase = (title + ' ' + searchYear).trim();
 
-        var params = new URLSearchParams({
-            Query: queryBase,
-            title: title,
-            title_original: original,
-            Category: '2000,5000'
-        });
+        var params = new URLSearchParams();
+        params.set('Query', (title + ' ' + searchYear).trim());
+        params.set('title', title);
+        params.set('title_original', original);
+        params.set('Category', '2000,5000');
 
-        if (parser.key) params.set('apikey', parser.key);
         if (searchYear) params.set('year', searchYear);
+        if (parser.key) params.set('apikey', parser.key);
 
         var url = 'https://' + parser.url +
             '/api/v2.0/indexers/all/results?' + params.toString();
 
         return request(proxyUrl(url)).then(function (data) {
             if (data && Array.isArray(data.Results)) return data.Results;
-            if (Array.isArray(data)) return data;
             if (data && Array.isArray(data.results)) return data.results;
-            if (data && Array.isArray(data.items)) return data.items;
-            if (data && Array.isArray(data.data)) return data.data;
+            if (Array.isArray(data)) return data;
 
-            return [];
+            throw new Error(
+                'Неожиданный формат ответа API: ' +
+                JSON.stringify(data).slice(0, 250)
+            );
         });
     }
 
     function searchParsers(query, originalTitle, year) {
         var results = [];
-        var errors = [];
+        var stats = [];
 
-        return PARSERS.reduce(function (chain, parser) {
-            return chain.then(function () {
-                return parserSearch(
-                    parser, query, originalTitle, year
-                ).then(function (items) {
+        return Promise.all(PARSERS.map(function (parser) {
+            return parserSearch(parser, query, originalTitle, year)
+                .then(function (items) {
                     items.forEach(function (item) {
                         item._parser = parser.name;
                         results.push(item);
                     });
-                }).catch(function (error) {
-                    errors.push(parser.name + ': ' + error.message);
+
+                    stats.push({
+                        name: parser.name,
+                        count: items.length,
+                        error: ''
+                    });
+                })
+                .catch(function (error) {
+                    stats.push({
+                        name: parser.name,
+                        count: 0,
+                        error: error && error.message
+                            ? error.message
+                            : String(error)
+                    });
                 });
+        })).then(function () {
+            stats.sort(function (a, b) {
+                var ai = PARSERS.findIndex(function (p) {
+                    return p.name === a.name;
+                });
+                var bi = PARSERS.findIndex(function (p) {
+                    return p.name === b.name;
+                });
+                return ai - bi;
             });
-        }, Promise.resolve()).then(function () {
-            return { items: results, errors: errors };
+
+            return {
+                items: results,
+                stats: stats,
+                errors: stats.filter(function (s) {
+                    return !!s.error;
+                }).map(function (s) {
+                    return s.name + ': ' + s.error;
+                })
+            };
         });
     }
 
@@ -817,10 +817,17 @@
                 return searchParsers(query, query, '').then(function (search) {
                     var items = search.items;
 
+                    var parserStatus = search.stats.map(function (stat) {
+                        return stat.name + ': ' +
+                            (stat.error
+                                ? 'ОШИБКА — ' + stat.error
+                                : stat.count + ' релизов');
+                    }).join('\n');
+
                     if (!items.length) {
                         setStatus(
-                            'Релизы не найдены.\n' +
-                            (search.errors.join('\n') || 'Нет результатов.')
+                            'Релизы не найдены.\n\n' +
+                            'Диагностика парсеров:\n' + parserStatus
                         );
                         return;
                     }
@@ -831,14 +838,14 @@
                     items.forEach(function (item) {
                         var hash = extractHash(item);
                         itemHashes.push(hash);
-
                         if (hash) hashes.push(hash);
                     });
 
                     setStatus(
                         'Найдено: ' + items.length +
                         '. Проверяю до ' + MAX_HASH_CHECKS +
-                        ' уникальных hash в RD…'
+                        ' уникальных hash в RD…\n\n' +
+                        'Диагностика парсеров:\n' + parserStatus
                     );
 
                     return checkHashes(
@@ -846,7 +853,8 @@
                         authResult.auth,
                         function (done, total) {
                             setStatus(
-                                'Проверка RD: ' + done + ' из ' + total
+                                'Проверка RD: ' + done + ' из ' + total +
+                                '\n\nДиагностика парсеров:\n' + parserStatus
                             );
                         }
                     ).then(function (checked) {
@@ -906,7 +914,8 @@
                             ' · Кэш: ' +
                             checked.results.filter(function (r) {
                                 return r.available;
-                            }).length;
+                            }).length +
+                            '\n\nДиагностика парсеров:\n' + parserStatus;
 
                         if (checked.stopReason) {
                             summary += '\nПроверка остановлена: ' +
@@ -914,7 +923,7 @@
                         }
 
                         if (search.errors.length) {
-                            summary += '\nОшибки парсеров:\n' +
+                            summary += '\n\nОшибки парсеров:\n' +
                                 search.errors.join('\n');
                         }
 
@@ -931,7 +940,6 @@
 
     function openPanel() {
         var old = document.getElementById('rd-bridge-root');
-
         if (old) old.remove();
 
         var root = document.createElement('div');
@@ -944,7 +952,6 @@
         var close = document.createElement('button');
         close.className = 'rd-bridge-button';
         close.textContent = 'Закрыть';
-
         close.onclick = function () {
             root.remove();
         };
@@ -1022,7 +1029,6 @@
 
                     getWorkingAuth().then(function (result) {
                         var user = result.user || {};
-
                         notify(
                             'RD работает: ' +
                             (user.username || user.email || user.id || 'OK')
@@ -1062,7 +1068,6 @@
             );
         } catch (error) {
             SETTINGS_REGISTERED = false;
-
             console.error(
                 '[' + PLUGIN_NAME + '] Ошибка регистрации настроек:',
                 error
@@ -1086,7 +1091,6 @@
                 '] Не удалось зарегистрировать настройки. ' +
                 'Проверь доступность Lampa.SettingsApi.'
             );
-
             return;
         }
 
@@ -1115,12 +1119,10 @@
 
             if (SETTINGS_REGISTERED) {
                 stopInitRetry();
-
                 console.log(
                     '[' + PLUGIN_NAME + '] Инициализация завершена',
                     PLUGIN_VERSION
                 );
-
                 return;
             }
         }
