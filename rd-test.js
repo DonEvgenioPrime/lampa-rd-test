@@ -2,17 +2,19 @@
     'use strict';
 
     var PLUGIN_NAME = 'Real-Debrid Bridge';
-    var PLUGIN_VERSION = '1.1.5-test';
+    var PLUGIN_VERSION = '1.1.6';
     var COMPONENT = 'rd_bridge';
-    var PROXY = 'https://lampa-rd-proxy.evgeniy4450.workers.dev/';
+    var PROXY_STORE = 'rd_bridge_worker_url_v1';
     var RD_API = 'https://api.real-debrid.com/rest/1.0/';
     var OAUTH = 'https://api.real-debrid.com/oauth/v2/';
     var PUBLIC_CLIENT_ID = 'X245A4XAIBGVM';
     var STORE = 'rd_bridge_oauth_v2';
+
     var PARSERS = [
         { name: 'MaxVol', url: 'jr.maxvol.pro', key: '' },
         { name: 'Jacred', url: 'jacred.xyz', key: '' }
     ];
+
     var MAX_HASH_CHECKS = 10;
     var HASH_CHECK_DELAY = 1500;
     var SETTINGS_REGISTERED = false;
@@ -29,10 +31,121 @@
         }
     }
 
+    /*
+     * Общая настройка Worker.
+     * Ключ совпадает с rd-card-button.js.
+     */
+    function getProxyUrl() {
+        try {
+            var value = (localStorage.getItem(PROXY_STORE) || '').trim();
+
+            if (!value) return '';
+
+            var url = new URL(value);
+
+            if (
+                url.protocol !== 'https:' ||
+                !url.hostname ||
+                url.username ||
+                url.password ||
+                url.search ||
+                url.hash
+            ) {
+                return '';
+            }
+
+            return url.href.replace(/\/+$/, '') + '/';
+        } catch (e) {
+            return '';
+        }
+    }
+
+    function requireProxy() {
+        var proxy = getProxyUrl();
+
+        if (!proxy) {
+            throw new Error(
+                'URL Cloudflare Worker не настроен или некорректен. ' +
+                'Открой настройки Lampa → Real-Debrid → ' +
+                'Настроить Cloudflare Worker URL.'
+            );
+        }
+
+        return proxy;
+    }
+
+    function proxyUrl(url) {
+        return requireProxy() + '?url=' + encodeURIComponent(url);
+    }
+
+    function saveProxyUrl(value) {
+        value = String(value || '').trim();
+
+        if (!value) {
+            throw new Error('URL Worker не может быть пустым.');
+        }
+
+        var url;
+
+        try {
+            url = new URL(value);
+        } catch (e) {
+            throw new Error('Некорректный URL Worker.');
+        }
+
+        if (
+            url.protocol !== 'https:' ||
+            !url.hostname ||
+            url.username ||
+            url.password ||
+            url.search ||
+            url.hash
+        ) {
+            throw new Error(
+                'Укажи базовый HTTPS URL Worker без логина, ' +
+                'пароля, параметров запроса и фрагмента.'
+            );
+        }
+
+        localStorage.setItem(
+            PROXY_STORE,
+            url.href.replace(/\/+$/, '') + '/'
+        );
+    }
+
+    function checkProxyConfigured() {
+        if (getProxyUrl()) return true;
+
+        notify(
+            'Сначала настрой URL Cloudflare Worker в разделе Real-Debrid.'
+        );
+
+        return false;
+    }
+
+    function askProxyUrl() {
+        var current = getProxyUrl();
+
+        var value = window.prompt(
+            'Введи базовый HTTPS URL своего Cloudflare Worker:',
+            current
+        );
+
+        if (value === null) return;
+
+        try {
+            saveProxyUrl(value);
+            notify('URL Cloudflare Worker сохранён для обоих плагинов.');
+        } catch (e) {
+            notify('Ошибка настройки Worker: ' + e.message);
+        }
+    }
+
     function request(url, options) {
         return fetch(url, options || {}).then(function (response) {
             return response.text().then(function (text) {
                 var data;
+
                 try {
                     data = text ? JSON.parse(text) : {};
                 } catch (e) {
@@ -42,11 +155,14 @@
                 if (!response.ok) {
                     throw new Error(
                         'HTTP ' + response.status + ': ' +
-                        (data.error_description || data.error ||
-                            data.message || response.statusText ||
+                        (data.error_description ||
+                            data.error ||
+                            data.message ||
+                            response.statusText ||
                             'Неизвестная ошибка')
                     );
                 }
+
                 return data;
             });
         });
@@ -54,9 +170,13 @@
 
     function postForm(url, values) {
         var body = new URLSearchParams();
+
         Object.keys(values).forEach(function (key) {
-            if (values[key] !== undefined &&
-                values[key] !== null && values[key] !== '') {
+            if (
+                values[key] !== undefined &&
+                values[key] !== null &&
+                values[key] !== ''
+            ) {
                 body.set(key, String(values[key]));
             }
         });
@@ -68,10 +188,6 @@
             },
             body: body.toString()
         });
-    }
-
-    function proxyUrl(url) {
-        return PROXY + '?url=' + encodeURIComponent(url);
     }
 
     function readAuth() {
@@ -99,8 +215,12 @@
     }
 
     function refreshAccessToken(auth) {
-        if (!auth || !auth.refresh_token ||
-            !auth.client_id || !auth.client_secret) {
+        if (
+            !auth ||
+            !auth.refresh_token ||
+            !auth.client_id ||
+            !auth.client_secret
+        ) {
             return Promise.reject(new Error(
                 'Нет данных для обновления токена. Подключи RD заново.'
             ));
@@ -154,35 +274,52 @@
 
     function showDeviceAuth(url, code) {
         var previous = document.getElementById('rd-device-auth');
+
         if (previous) previous.remove();
 
         var overlay = document.createElement('div');
         overlay.id = 'rd-device-auth';
-        overlay.style.cssText = 'position:fixed;inset:0;z-index:100000;' +
+        overlay.style.cssText =
+            'position:fixed;inset:0;z-index:100000;' +
             'display:flex;align-items:center;justify-content:center;' +
             'padding:24px;background:rgba(0,0,0,.88);color:#fff;' +
             'font-family:Arial,sans-serif;box-sizing:border-box;';
 
         var panel = document.createElement('div');
-        panel.style.cssText = 'width:100%;max-width:620px;text-align:center;';
+        panel.style.cssText =
+            'width:100%;max-width:620px;text-align:center;';
 
         var title = document.createElement('div');
         title.textContent = 'Подключение Real-Debrid';
-        title.style.cssText = 'font-size:clamp(24px,5vw,38px);font-weight:bold;margin-bottom:28px;';
+        title.style.cssText =
+            'font-size:clamp(24px,5vw,38px);font-weight:bold;' +
+            'margin-bottom:28px;';
 
         var instruction = document.createElement('div');
-        instruction.textContent = '1. Открой официальный сайт и введи этот код';
-        instruction.style.cssText = 'font-size:clamp(17px,3vw,25px);margin-bottom:16px;';
+        instruction.textContent =
+            '1. Открой официальный сайт и введи этот код';
+        instruction.style.cssText =
+            'font-size:clamp(17px,3vw,25px);margin-bottom:16px;';
 
         var codeBox = document.createElement('div');
         codeBox.textContent = code || 'Код недоступен';
-        codeBox.style.cssText = 'padding:20px 12px;margin:0 0 22px;border-radius:16px;' +
-            'background:#252525;color:#fff;font-size:clamp(30px,7vw,48px);' +
-            'font-weight:bold;letter-spacing:3px;user-select:text;-webkit-user-select:text;';
+        codeBox.style.cssText =
+            'padding:20px 12px;margin:0 0 22px;border-radius:16px;' +
+            'background:#252525;color:#fff;' +
+            'font-size:clamp(30px,7vw,48px);font-weight:bold;' +
+            'letter-spacing:3px;user-select:text;-webkit-user-select:text;';
 
-        var buttonStyle = 'display:block;margin:12px auto;padding:16px 24px;' +
+        var buttonStyle =
+            'display:block;margin:12px auto;padding:16px 24px;' +
             'border:0;border-radius:14px;background:#eee;color:#0784ff;' +
             'font-size:clamp(18px,3.5vw,27px);cursor:pointer;';
+
+        var status = document.createElement('div');
+        status.textContent =
+            'Ожидаем подтверждения на сайте Real-Debrid…';
+        status.style.cssText =
+            'font-size:clamp(17px,3vw,25px);margin:20px 0 40px;' +
+            'overflow-wrap:anywhere;';
 
         var copy = document.createElement('button');
         copy.textContent = 'Копировать код';
@@ -213,6 +350,7 @@
             input.value = value;
             input.style.position = 'fixed';
             input.style.opacity = '0';
+
             document.body.appendChild(input);
             input.focus();
             input.select();
@@ -234,43 +372,57 @@
         var open = document.createElement('button');
         open.textContent = 'Открыть Real-Debrid';
         open.style.cssText = buttonStyle;
+
         open.onclick = function () {
-            var win = window.open(url || 'https://real-debrid.com/device', '_blank');
-            if (!win) window.location.href = url || 'https://real-debrid.com/device';
+            var target = url || 'https://real-debrid.com/device';
+            var win = window.open(target, '_blank');
+
+            if (!win) window.location.href = target;
         };
 
         var instruction2 = document.createElement('div');
-        instruction2.textContent = '2. Подтверди устройство на сайте';
-        instruction2.style.cssText = 'font-size:clamp(17px,3vw,25px);margin:36px 0 22px;';
-
-        var status = document.createElement('div');
-        status.textContent = 'Ожидаем подтверждения на сайте Real-Debrid…';
-        status.style.cssText = 'font-size:clamp(17px,3vw,25px);margin:20px 0 40px;overflow-wrap:anywhere;';
+        instruction2.textContent =
+            '2. Подтверди устройство на сайте';
+        instruction2.style.cssText =
+            'font-size:clamp(17px,3vw,25px);margin:36px 0 22px;';
 
         var close = document.createElement('button');
         close.textContent = 'Закрыть';
         close.style.cssText = buttonStyle;
-        close.onclick = function () { overlay.remove(); };
+        close.onclick = function () {
+            overlay.remove();
+        };
 
         var note = document.createElement('div');
-        note.textContent = 'Вводи пароль только на официальном сайте Real-Debrid.';
-        note.style.cssText = 'font-size:16px;color:#aaa;margin-top:26px;';
+        note.textContent =
+            'Вводи пароль только на официальном сайте Real-Debrid.';
+        note.style.cssText =
+            'font-size:16px;color:#aaa;margin-top:26px;';
 
-        [title, instruction, codeBox, copy, open, instruction2, status, close, note]
-            .forEach(function (element) { panel.appendChild(element); });
+        [
+            title, instruction, codeBox, copy, open,
+            instruction2, status, close, note
+        ].forEach(function (element) {
+            panel.appendChild(element);
+        });
+
         overlay.appendChild(panel);
         document.body.appendChild(overlay);
 
         return {
-            setStatus: function (message) { status.textContent = message; },
-            close: function () { overlay.remove(); }
+            setStatus: function (message) {
+                status.textContent = message;
+            },
+            close: function () {
+                overlay.remove();
+            }
         };
     }
 
     /*
      * Авторизация по коду устройства.
-     * device/code и device/credentials вызываются через GET с query-параметрами;
-     * обмен кода на токен и обновление токена остаются POST.
+     * Запросы device/code и device/credentials выполняются через GET.
+     * Обмен кода на токен и обновление токена выполняются через POST.
      */
     function connectAuth() {
         var deviceParams = new URLSearchParams();
@@ -293,6 +445,7 @@
             var interval = Math.max(
                 5, Number(device.interval) || 5
             ) * 1000;
+
             var timeout = (Number(device.expires_in) || 1800) * 1000;
             var started = Date.now();
 
@@ -308,22 +461,25 @@
                 credentialsParams.set('code', device.device_code);
 
                 return request(
-                    proxyUrl(OAUTH + 'device/credentials?' +
-                        credentialsParams.toString()),
+                    proxyUrl(
+                        OAUTH + 'device/credentials?' +
+                        credentialsParams.toString()
+                    ),
                     { method: 'GET' }
                 ).catch(function (error) {
-                    if (/HTTP 400|authorization_pending|slow_down|HTTP 403|HTTP 404/i.test(
-                        error.message
-                    )) {
+                    if (
+                        /HTTP 400|authorization_pending|slow_down|HTTP 403|HTTP 404/i
+                            .test(error.message)
+                    ) {
                         return delay(interval).then(pollCredentials);
                     }
+
                     throw error;
                 });
             }
 
             return pollCredentials().then(function (credentials) {
-                if (!credentials.client_id ||
-                    !credentials.client_secret) {
+                if (!credentials.client_id || !credentials.client_secret) {
                     throw new Error(
                         'RD не вернул client_id/client_secret.'
                     );
@@ -349,13 +505,17 @@
                     };
 
                     saveAuth(auth);
-                    authWindow.setStatus('Устройство подтверждено! Real-Debrid подключён.');
+
+                    authWindow.setStatus(
+                        'Устройство подтверждено! Real-Debrid подключён.'
+                    );
 
                     return profile(auth.access_token).then(function (user) {
                         notify(
                             'RD подключён: ' +
                             (user.username || user.email || user.id || 'OK')
                         );
+
                         return { auth: auth, user: user };
                     });
                 });
@@ -387,11 +547,14 @@
         for (var i = 0; i < values.length; i++) {
             var value = String(values[i] || '');
             var magnet = value.match(/btih:([a-f0-9]{40})/i);
+
             if (magnet) return magnet[1].toLowerCase();
 
             var hash = value.match(/\b[a-f0-9]{40}\b/i);
+
             if (hash) return hash[0].toLowerCase();
         }
+
         return '';
     }
 
@@ -401,8 +564,7 @@
     }
 
     /*
-     * Поиск через API Jackett-совместимых публичных индексаторов,
-     * по логике запроса из плагина TorBox.
+     * Поиск через API Jackett-совместимых публичных индексаторов.
      */
     function parserSearch(parser, query, originalTitle, year) {
         var title = String(query || '').trim();
@@ -429,6 +591,7 @@
             if (data && Array.isArray(data.results)) return data.results;
             if (data && Array.isArray(data.items)) return data.items;
             if (data && Array.isArray(data.data)) return data.data;
+
             return [];
         });
     }
@@ -464,7 +627,11 @@
                 Authorization: 'Bearer ' + auth.access_token
             }
         }).then(function (data) {
-            var item = data && data[hash];
+            var item = data && (
+                data[hash] ||
+                data[String(hash).toLowerCase()] ||
+                data[String(hash).toUpperCase()]
+            );
 
             return {
                 hash: hash,
@@ -488,6 +655,7 @@
 
         hashes.forEach(function (hash) {
             hash = normalizeHash(hash);
+
             if (hash && !seen[hash]) {
                 seen[hash] = true;
                 unique.push(hash);
@@ -517,10 +685,11 @@
                     onProgress(index + 1, unique.length, result);
                 }
 
-                if (result.error &&
-                    /HTTP 401|bad_token|HTTP 403|disabled_endpoint|HTTP 429|too_many_requests/i.test(
-                        result.error
-                    )) {
+                if (
+                    result.error &&
+                    /HTTP 401|bad_token|HTTP 403|disabled_endpoint|HTTP 429|too_many_requests/i
+                        .test(result.error)
+                ) {
                     stopped = true;
                     stopReason = result.error;
                 }
@@ -548,6 +717,7 @@
 
         var style = document.createElement('style');
         style.id = 'rd-bridge-style';
+
         style.textContent =
             '.rd-bridge-panel{padding:16px;color:inherit}' +
             '.rd-bridge-row{padding:12px;margin:8px 0;border-radius:8px;background:rgba(127,127,127,.12)}' +
@@ -565,10 +735,12 @@
 
         var panel = document.createElement('div');
         panel.className = 'rd-bridge-panel';
+
         panel.innerHTML =
             '<div class="rd-bridge-title">Real-Debrid — кэш</div>' +
             '<div class="rd-bridge-status" id="rd-status">Версия ' +
             PLUGIN_VERSION + '</div>' +
+            '<button class="rd-bridge-button" id="rd-worker">Настроить Worker URL</button>' +
             '<button class="rd-bridge-button" id="rd-connect">Подключить RD</button>' +
             '<button class="rd-bridge-button" id="rd-check">Проверить подключение</button>' +
             '<button class="rd-bridge-button" id="rd-disconnect">Отключить RD</button>' +
@@ -584,23 +756,38 @@
             status.textContent = text;
         }
 
+        panel.querySelector('#rd-worker').onclick = function () {
+            askProxyUrl();
+            setStatus(getProxyUrl()
+                ? 'Worker URL настроен.'
+                : 'Worker URL не настроен.');
+        };
+
         panel.querySelector('#rd-connect').onclick = function () {
+            if (!checkProxyConfigured()) return;
+
             setStatus('Ожидаю авторизацию RD…');
 
             connectAuth().then(function (result) {
-                setStatus('Подключено: ' +
-                    (result.user.username || result.user.email || 'OK'));
+                setStatus(
+                    'Подключено: ' +
+                    (result.user.username || result.user.email || 'OK')
+                );
             }).catch(function (error) {
                 setStatus('Ошибка подключения: ' + error.message);
             });
         };
 
         panel.querySelector('#rd-check').onclick = function () {
+            if (!checkProxyConfigured()) return;
+
             setStatus('Проверяю RD…');
 
             getWorkingAuth().then(function (result) {
-                setStatus('RD работает: ' +
-                    (result.user.username || result.user.email || 'OK'));
+                setStatus(
+                    'RD работает: ' +
+                    (result.user.username || result.user.email || 'OK')
+                );
             }).catch(function (error) {
                 setStatus('Проверка не пройдена: ' + error.message);
             });
@@ -612,6 +799,8 @@
         };
 
         panel.querySelector('#rd-search').onclick = function () {
+            if (!checkProxyConfigured()) return;
+
             var query = panel.querySelector('#rd-query').value.trim();
 
             if (!query) {
@@ -642,6 +831,7 @@
                     items.forEach(function (item) {
                         var hash = extractHash(item);
                         itemHashes.push(hash);
+
                         if (hash) hashes.push(hash);
                     });
 
@@ -655,7 +845,9 @@
                         hashes,
                         authResult.auth,
                         function (done, total) {
-                            setStatus('Проверка RD: ' + done + ' из ' + total);
+                            setStatus(
+                                'Проверка RD: ' + done + ' из ' + total
+                            );
                         }
                     ).then(function (checked) {
                         var byHash = {};
@@ -693,7 +885,9 @@
                             }
 
                             meta.textContent =
-                                (item._parser || 'Парсер') + ' · ' + resultText;
+                                (item._parser || 'Парсер') +
+                                ' · ' + resultText;
+
                             row.appendChild(meta);
 
                             if (hash) {
@@ -737,6 +931,7 @@
 
     function openPanel() {
         var old = document.getElementById('rd-bridge-root');
+
         if (old) old.remove();
 
         var root = document.createElement('div');
@@ -749,6 +944,7 @@
         var close = document.createElement('button');
         close.className = 'rd-bridge-button';
         close.textContent = 'Закрыть';
+
         close.onclick = function () {
             root.remove();
         };
@@ -759,10 +955,13 @@
     }
 
     function addSettings() {
-        if (!window.Lampa || !Lampa.SettingsApi ||
+        if (
+            !window.Lampa ||
+            !Lampa.SettingsApi ||
             typeof Lampa.SettingsApi.addComponent !== 'function' ||
             typeof Lampa.SettingsApi.addParam !== 'function' ||
-            SETTINGS_REGISTERED) {
+            SETTINGS_REGISTERED
+        ) {
             return;
         }
 
@@ -793,10 +992,21 @@
             }
 
             addButton(
+                'rd_worker_url_v1',
+                'Настроить Cloudflare Worker URL',
+                'Общий адрес Worker для rd-test.js и rd-card-button.js',
+                function () {
+                    askProxyUrl();
+                }
+            );
+
+            addButton(
                 'rd_oauth_start_v2',
                 'Подключить Real-Debrid',
                 'Авторизация через официальный сайт Real-Debrid',
                 function () {
+                    if (!checkProxyConfigured()) return;
+
                     connectAuth().catch(function (error) {
                         notify('Ошибка подключения RD: ' + error.message);
                     });
@@ -808,14 +1018,19 @@
                 'Проверить подключение',
                 'Проверить профиль и обновить токен при необходимости',
                 function () {
+                    if (!checkProxyConfigured()) return;
+
                     getWorkingAuth().then(function (result) {
                         var user = result.user || {};
+
                         notify(
                             'RD работает: ' +
                             (user.username || user.email || user.id || 'OK')
                         );
                     }).catch(function (error) {
-                        notify('Проверка RD не пройдена: ' + error.message);
+                        notify(
+                            'Проверка RD не пройдена: ' + error.message
+                        );
                     });
                 }
             );
@@ -840,12 +1055,14 @@
             );
 
             SETTINGS_REGISTERED = true;
+
             console.log(
                 '[' + PLUGIN_NAME + '] Настройки зарегистрированы',
                 PLUGIN_VERSION
             );
         } catch (error) {
             SETTINGS_REGISTERED = false;
+
             console.error(
                 '[' + PLUGIN_NAME + '] Ошибка регистрации настроек:',
                 error
@@ -869,6 +1086,7 @@
                 '] Не удалось зарегистрировать настройки. ' +
                 'Проверь доступность Lampa.SettingsApi.'
             );
+
             return;
         }
 
@@ -888,17 +1106,21 @@
 
         window.rdBridgeOpen = openPanel;
 
-        if (Lampa.SettingsApi &&
+        if (
+            Lampa.SettingsApi &&
             typeof Lampa.SettingsApi.addComponent === 'function' &&
-            typeof Lampa.SettingsApi.addParam === 'function') {
+            typeof Lampa.SettingsApi.addParam === 'function'
+        ) {
             addSettings();
 
             if (SETTINGS_REGISTERED) {
                 stopInitRetry();
+
                 console.log(
                     '[' + PLUGIN_NAME + '] Инициализация завершена',
                     PLUGIN_VERSION
                 );
+
                 return;
             }
         }
