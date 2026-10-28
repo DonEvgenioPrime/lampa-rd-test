@@ -1,3 +1,4 @@
+
 (function () {
 'use strict';
 
@@ -17,20 +18,12 @@ var SORT_OPTIONS = [
   { value: 'date', label: 'По дате добавления' }
 ];
 
-/*
- * Получение URL Worker из общей настройки.
- * Тот же ключ используется основным плагином rd-test.js.
- */
 function getProxyUrl() {
   try {
     var value = (localStorage.getItem(PROXY_STORE) || '').trim();
-
     if (!value) return '';
-
     var url = new URL(value);
-
     if (url.protocol !== 'https:') return '';
-
     return url.href.replace(/\/+$/, '') + '/';
   } catch (e) {
     return '';
@@ -39,13 +32,11 @@ function getProxyUrl() {
 
 function requireProxy() {
   var proxy = getProxyUrl();
-
   if (!proxy) {
     throw new Error(
       'Сначала укажи URL своего Cloudflare Worker в настройках Real-Debrid.'
     );
   }
-
   return proxy;
 }
 
@@ -60,7 +51,6 @@ function token() {
 function getSortMode() {
   try {
     var value = localStorage.getItem(SORT_STORE) || 'size_asc';
-
     return SORT_OPTIONS.some(function (option) {
       return option.value === value;
     }) ? value : 'size_asc';
@@ -84,7 +74,6 @@ function note(s) {
 function parseResponse(response) {
   return response.text().then(function (text) {
     var data;
-
     try {
       data = text ? JSON.parse(text) : {};
     } catch (e) {
@@ -117,21 +106,17 @@ function req(url, access, options) {
   if (access) headers.Authorization = 'Bearer ' + access;
 
   var proxy;
-
   try {
     proxy = requireProxy();
   } catch (e) {
     return Promise.reject(e);
   }
 
-  return fetch(
-    proxy + '?url=' + encodeURIComponent(url),
-    {
-      method: options.method || 'GET',
-      headers: headers,
-      body: options.body
-    }
-  ).then(parseResponse);
+  return fetch(proxy + '?url=' + encodeURIComponent(url), {
+    method: options.method || 'GET',
+    headers: headers,
+    body: options.body
+  }).then(parseResponse);
 }
 
 function postForm(url, access, values) {
@@ -159,7 +144,6 @@ function normalizeImdb(value) {
 
 function getImdbId(movie) {
   movie = movie || {};
-
   var ids = movie.ids || {};
   var external = movie.external_ids || {};
 
@@ -253,12 +237,10 @@ function magnetDiagnostic(item) {
 function firstValue(obj, names) {
   for (var i = 0; i < names.length; i++) {
     var value = obj && obj[names[i]];
-
     if (value !== undefined && value !== null && value !== '') {
       return value;
     }
   }
-
   return '';
 }
 
@@ -270,19 +252,17 @@ function parseDateValue(value) {
   }
 
   var text = String(value).trim();
-
   if (/^\d{10}$/.test(text)) return Number(text) * 1000;
   if (/^\d{13}$/.test(text)) return Number(text);
 
   var parsed = Date.parse(text);
-
   return isNaN(parsed) ? 0 : parsed;
 }
 
 /*
- * Поиск на MaxVol и JacRed.
- * Каждый результат получает имя источника, чтобы можно было объединить
- * одинаковые хеши и показать оба источника в одной карточке.
+ * Ищем на MaxVol и JacRed.
+ * rawCount — все результаты API до фильтрации.
+ * validHashCount — результаты, для которых удалось определить hash.
  */
 function search(host, q, access) {
   var isJacRed = host.indexOf('jac.red') !== -1;
@@ -299,7 +279,11 @@ function search(host, q, access) {
       ? data
       : (data.Results || data.results || []);
 
-    return list.map(function (x) {
+    if (!Array.isArray(list)) {
+      throw new Error('Ответ парсера не содержит массива результатов');
+    }
+
+    var mapped = list.map(function (x) {
       var rawSize = firstValue(x, ['Size', 'size', 'length']);
 
       var rawSeeders = firstValue(x, [
@@ -330,11 +314,18 @@ function search(host, q, access) {
       };
 
       item.magnet = magnetOf(item);
-
       return item;
-    }).filter(function (item) {
+    });
+
+    var valid = mapped.filter(function (item) {
       return !!item.hash;
     });
+
+    // Дополнительные показатели для диагностики.
+    valid.rawCount = list.length;
+    valid.validHashCount = valid.length;
+
+    return valid;
   });
 }
 
@@ -364,10 +355,8 @@ function sortItems(items, mode) {
       if (a.dateAdded && b.dateAdded) {
         return b.dateAdded - a.dateAdded;
       }
-
       if (a.dateAdded) return -1;
       if (b.dateAdded) return 1;
-
       return (b.seeders - a.seeders) ||
         a.title.localeCompare(b.title);
     }
@@ -390,7 +379,6 @@ function checkDMM(imdbId, hashes, access) {
   }
 
   var proxy;
-
   try {
     proxy = requireProxy();
   } catch (e) {
@@ -428,15 +416,14 @@ function findHashResult(data, hash) {
 }
 
 /*
- * Кеш подтверждается только тогда, когда DMM вернул непустой массив files.
- * Отсутствующий хеш или неполный ответ не считаются подтверждением
- * ни наличия, ни отсутствия кеша.
+ * Отсутствие результата или пустой files не доказывает,
+ * что раздача не закеширована. Поэтому такие ответы — unknown.
  */
 function classifyCache(result) {
   if (!result || typeof result !== 'object') return 'unknown';
 
-  if (Array.isArray(result.files)) {
-    return result.files.length > 0 ? 'cached' : 'unknown';
+  if (Array.isArray(result.files) && result.files.length > 0) {
+    return 'cached';
   }
 
   return 'unknown';
@@ -494,7 +481,6 @@ function getRDUserId(screen, button) {
   }
 
   var proxy;
-
   try {
     proxy = requireProxy();
   } catch (e) {
@@ -518,7 +504,6 @@ function getRDUserId(screen, button) {
 
     var id = String(data.id);
     var old = screen.querySelector('#rd-user-id-result');
-
     if (old) old.remove();
 
     var result = document.createElement('div');
@@ -563,6 +548,32 @@ function getRDUserId(screen, button) {
   });
 }
 
+/* Обновление метки из сохранённого состояния item. */
+function updateCacheLabel(screen, item) {
+  var node = screen.querySelector(
+    '[data-cache-hash="' + item.hash + '"]'
+  );
+
+  if (!node) return;
+
+  if (item.cacheState === 'cached') {
+    node.textContent =
+      'Проверка кеша: DMM · подтверждён (' +
+      (Number(item.cacheFiles) || 0) + ' файлов)';
+    node.style.color = '#72e6a2';
+  } else if (item.cacheState === 'error') {
+    node.textContent =
+      'Проверка кеша: DMM · ошибка проверки (кеш не подтверждён)';
+    node.style.color = '#ff8585';
+  } else if (item.cacheState === 'checking') {
+    node.textContent = 'Проверка кеша: DMM · проверяем…';
+    node.style.color = '#ffc766';
+  } else {
+    node.textContent = 'Проверка кеша: DMM · нет подтверждения';
+    node.style.color = '#ffc766';
+  }
+}
+
 function runCacheCheck(items, imdbId, access, screen) {
   var status = screen.querySelector('#rd-status');
 
@@ -572,16 +583,8 @@ function runCacheCheck(items, imdbId, access, screen) {
 
     items.forEach(function (item) {
       item.cacheState = 'unknown';
-
-      var node = screen.querySelector(
-        '[data-cache-hash="' + item.hash + '"]'
-      );
-
-      if (node) {
-        node.textContent =
-          'Проверка кеша: DMM · не проверено — нет IMDb ID';
-        node.style.color = '#ffc766';
-      }
+      item.cacheFiles = 0;
+      updateCacheLabel(screen, item);
     });
 
     renderCards(screen);
@@ -594,16 +597,15 @@ function runCacheCheck(items, imdbId, access, screen) {
   }
 
   var batches = [];
-
   for (var i = 0; i < items.length; i += 100) {
     batches.push(items.slice(i, i + 100));
   }
 
   status.textContent =
-    'Проверяем DMM · IMDb: ' + imdbId + ' · раздач: ' + items.length;
+    'Проверяем DMM · IMDb: ' + imdbId +
+    ' · раздач: ' + items.length;
 
   var cachedCount = 0;
-  var notConfirmedCount = 0;
   var unknownCount = 0;
   var errors = [];
 
@@ -623,44 +625,20 @@ function runCacheCheck(items, imdbId, access, screen) {
         }
 
         batch.forEach(function (item) {
-          var node = screen.querySelector(
-            '[data-cache-hash="' + item.hash + '"]'
-          );
-
           var result = findHashResult(data, item.hash);
           var state = classifyCache(result);
 
           item.cacheState = state;
+          item.cacheFiles =
+            state === 'cached' ? result.files.length : 0;
 
           if (state === 'cached') {
             cachedCount++;
-
-            if (node) {
-              node.textContent =
-                'Проверка кеша: DMM · подтверждён (' +
-                result.files.length + ' файлов)';
-
-              node.style.color = '#72e6a2';
-            }
-          } else if (state === 'not-confirmed') {
-            notConfirmedCount++;
-
-            if (node) {
-              node.textContent =
-                'Проверка кеша: DMM · не подтверждён';
-
-              node.style.color = '#ffc766';
-            }
           } else {
             unknownCount++;
-
-            if (node) {
-              node.textContent =
-                'Проверка кеша: DMM · нет подтверждения';
-
-              node.style.color = '#ffc766';
-            }
           }
+
+          updateCacheLabel(screen, item);
         });
       });
     }).catch(function (err) {
@@ -668,16 +646,8 @@ function runCacheCheck(items, imdbId, access, screen) {
 
       batch.forEach(function (item) {
         item.cacheState = 'error';
-
-        var node = screen.querySelector(
-          '[data-cache-hash="' + item.hash + '"]'
-        );
-
-        if (node) {
-          node.textContent =
-            'Проверка кеша: DMM · ошибка проверки (кеш не подтверждён)';
-          node.style.color = '#ff8585';
-        }
+        item.cacheFiles = 0;
+        updateCacheLabel(screen, item);
       });
     });
   }, Promise.resolve()).then(function () {
@@ -685,8 +655,7 @@ function runCacheCheck(items, imdbId, access, screen) {
 
     status.textContent =
       'DMM · подтверждено: ' + cachedCount +
-      ' · без подтверждения: ' + notConfirmedCount +
-      ' · неизвестно: ' + unknownCount +
+      ' · без подтверждения: ' + unknownCount +
       (errors.length ? ' · ошибок: ' + errors.length : '');
 
     var diag = screen.querySelector('#rd-dmm-diagnostic');
@@ -696,18 +665,16 @@ function runCacheCheck(items, imdbId, access, screen) {
         'IMDb ID: ' + imdbId +
         '\nПроверено раздач: ' + items.length +
         '\nПодтверждено: ' + cachedCount +
-        '\nБез подтверждения: ' + notConfirmedCount +
-        '\nНеизвестно: ' + unknownCount +
+        '\nБез подтверждения: ' + unknownCount +
         (errors.length ? '\nОшибки:\n' + errors.join('\n') : '');
     }
+
+    renderCards(screen);
   });
 }
 
 /*
- * Защита от двойного клика.
- * После подтверждённого создания задачи не отправляем magnet снова.
- * При неоднозначном сетевом результате блокируем повторную отправку,
- * потому что RD мог получить запрос, даже если ответ не дошёл.
+ * Защита от повторной отправки magnet.
  */
 function testOne(item, button, resultNode) {
   var access = token();
@@ -755,8 +722,6 @@ function testOne(item, button, resultNode) {
     }
 
     var id = String(response.id);
-
-    // Фиксируем ID сразу после успешного ответа RD.
     button.dataset.rdTaskCreated = id;
     button.textContent = 'Задача создана';
 
@@ -788,10 +753,6 @@ function testOne(item, button, resultNode) {
       button.disabled = true;
     });
   }).catch(function (err) {
-    /*
-     * Запрос мог дойти до RD, даже если ответ потерялся.
-     * Не отправляем тот же magnet повторно автоматически.
-     */
     button.dataset.rdBusy = '0';
     button.disabled = true;
     button.textContent = 'Проверь задачу RD';
@@ -851,7 +812,6 @@ function openSortMenu(screen) {
     row.onclick = function (event) {
       event.preventDefault();
       event.stopPropagation();
-
       setSortMode(option.value);
       menu.remove();
       renderCards(screen);
@@ -872,7 +832,6 @@ function openSortMenu(screen) {
 function renderCards(screen) {
   var all = screen.__rdItems || [];
   var box = screen.querySelector('#rd-results');
-
   if (!box) return;
 
   var mode = getSortMode();
@@ -883,10 +842,7 @@ function renderCards(screen) {
   })[0];
 
   var sortInfo = screen.querySelector('#rd-sort-current');
-
-  if (sortInfo && selected) {
-    sortInfo.textContent = selected.label;
-  }
+  if (sortInfo && selected) sortInfo.textContent = selected.label;
 
   sorted.forEach(function (item) {
     var card = item._rdCard;
@@ -908,7 +864,6 @@ function renderCards(screen) {
       meta.style.cssText = 'opacity:.75;font-size:.9em';
 
       var bits = [];
-
       if (item.size) bits.push(formatSize(item.size));
       bits.push('Сиды: ' + item.seeders);
       if (item.tracker) bits.push(item.tracker);
@@ -922,10 +877,8 @@ function renderCards(screen) {
 
       var sourceLabel = document.createElement('div');
       sourceLabel.setAttribute('data-source-label', '1');
-      sourceLabel.style.cssText = 'opacity:.9;font-size:.9em;margin-top:4px';
-      sourceLabel.textContent =
-        'Источник: ' +
-        (item.sources || [item.source || 'неизвестен']).join(' + ');
+      sourceLabel.style.cssText =
+        'opacity:.9;font-size:.9em;margin-top:4px';
       card.appendChild(sourceLabel);
 
       var diagDetails = document.createElement('details');
@@ -943,7 +896,6 @@ function renderCards(screen) {
         'font:12px monospace;line-height:1.5';
 
       var diag = magnetDiagnostic(item);
-
       diagPre.textContent =
         'Название карточки Lampa:\n' + diag.title +
         '\n\nИмя dn в magnet:\n' + diag.dn +
@@ -984,40 +936,16 @@ function renderCards(screen) {
     }
 
     var sourceLabel = card.querySelector('[data-source-label]');
-
     if (sourceLabel) {
       sourceLabel.textContent =
         'Источник: ' +
         (item.sources || [item.source || 'неизвестен']).join(' + ');
     }
 
-    var cacheLabel = card.querySelector('[data-cache-hash]');
+    // Число файлов берётся из item.cacheFiles, а не теряется
+    // при повторном вызове renderCards().
+    updateCacheLabel(screen, item);
 
-    if (cacheLabel) {
-      if (item.cacheState === 'cached') {
-        cacheLabel.textContent =
-          'Проверка кеша: DMM · кеш подтверждён';
-        cacheLabel.style.color = '#72e6a2';
-      } else if (item.cacheState === 'unknown') {
-        cacheLabel.textContent =
-          'Проверка кеша: DMM · нет подтверждения';
-        cacheLabel.style.color = '#ffc766';
-      } else if (item.cacheState === 'error') {
-        cacheLabel.textContent =
-          'Проверка кеша: DMM · ошибка (кеш не подтверждён)';
-        cacheLabel.style.color = '#ff8585';
-      } else if (item.cacheState === 'checking') {
-        cacheLabel.textContent =
-          'Проверка кеша: DMM · проверяем…';
-        cacheLabel.style.color = '#ffc766';
-      } else {
-        cacheLabel.textContent =
-          'Проверка кеша: DMM · не подтверждён';
-        cacheLabel.style.color = '#ffc766';
-      }
-    }
-
-    // Перемещаем существующую карточку, не пересоздавая кнопку.
     box.appendChild(card);
   });
 }
@@ -1030,7 +958,6 @@ function openSearch(query, movie) {
     return;
   }
 
-  // Проверяем настройку до запуска поиска.
   try {
     requireProxy();
   } catch (e) {
@@ -1040,7 +967,6 @@ function openSearch(query, movie) {
 
   var imdbId = getImdbId(movie);
   var old = document.getElementById('rd-card-search');
-
   if (old) old.remove();
 
   var screen = document.createElement('div');
@@ -1101,19 +1027,31 @@ function openSearch(query, movie) {
     openSortMenu(screen);
   };
 
-  var parserCounts = {};
+  var parserStats = {};
   var parserErrors = [];
 
   Promise.all(PARSERS.map(function (host) {
     return search(host, query, access).then(function (rows) {
-      parserCounts[host] = rows.length;
+      parserStats[host] = {
+        rawCount: rows.rawCount || 0,
+        validHashCount: rows.validHashCount || rows.length,
+        rows: rows,
+        error: ''
+      };
       return rows;
     }).catch(function (err) {
-      parserCounts[host] = 0;
+      parserStats[host] = {
+        rawCount: 0,
+        validHashCount: 0,
+        rows: [],
+        error: err.message
+      };
+
       parserErrors.push(
         (host.indexOf('jac.red') !== -1 ? 'JacRed' : 'MaxVol') +
         ': ' + err.message
       );
+
       return [];
     });
   })).then(function (groups) {
@@ -1125,7 +1063,6 @@ function openSearch(query, movie) {
     groups.forEach(function (group) {
       group.forEach(function (item) {
         var key = String(item.hash || '').toLowerCase();
-
         if (!key) return;
 
         if (!seen[key]) {
@@ -1147,29 +1084,16 @@ function openSearch(query, movie) {
 
           existing.sources.sort(function (a, b) {
             var order = { MaxVol: 0, JacRed: 1 };
-
             return (order[a] === undefined ? 99 : order[a]) -
               (order[b] === undefined ? 99 : order[b]);
           });
 
           existing.source = existing.sources.join(' + ');
 
-          if (!existing.magnet && item.magnet) {
-            existing.magnet = item.magnet;
-          }
-
-          if (!existing.tracker && item.tracker) {
-            existing.tracker = item.tracker;
-          }
-
-          if (item.seeders > existing.seeders) {
-            existing.seeders = item.seeders;
-          }
-
-          if (item.size > existing.size) {
-            existing.size = item.size;
-          }
-
+          if (!existing.magnet && item.magnet) existing.magnet = item.magnet;
+          if (!existing.tracker && item.tracker) existing.tracker = item.tracker;
+          if (item.seeders > existing.seeders) existing.seeders = item.seeders;
+          if (item.size > existing.size) existing.size = item.size;
           if (item.dateAdded > existing.dateAdded) {
             existing.dateAdded = item.dateAdded;
           }
@@ -1179,9 +1103,37 @@ function openSearch(query, movie) {
 
     screen.__rdItems = all;
 
+    var maxStats = parserStats[PARSERS[0]] || {
+      rows: [], rawCount: 0, validHashCount: 0
+    };
+    var jacStats = parserStats[PARSERS[1]] || {
+      rows: [], rawCount: 0, validHashCount: 0
+    };
+
+    var maxHashes = {};
+    var jacHashes = {};
+
+    maxStats.rows.forEach(function (item) {
+      maxHashes[item.hash] = true;
+    });
+
+    jacStats.rows.forEach(function (item) {
+      jacHashes[item.hash] = true;
+    });
+
+    var maxUnique = Object.keys(maxHashes).length;
+    var jacUnique = Object.keys(jacHashes).length;
+    var overlap = 0;
+
+    Object.keys(maxHashes).forEach(function (hash) {
+      if (jacHashes[hash]) overlap++;
+    });
+
+    var maxOnly = maxUnique - overlap;
+    var jacOnly = jacUnique - overlap;
+
     var box = screen.querySelector('#rd-results');
     var details = document.createElement('details');
-
     details.id = 'rd-search-diagnostics';
     details.style.cssText =
       'margin:14px 0;padding:12px;background:#292929;border-radius:8px';
@@ -1191,25 +1143,38 @@ function openSearch(query, movie) {
     details.appendChild(summary);
 
     var pre = document.createElement('pre');
-
     pre.style.cssText =
       'white-space:pre-wrap;overflow-wrap:anywhere;font:13px monospace';
 
+    function parserReport(host, label) {
+      var info = parserStats[host] || {};
+      return label + ':\n' +
+        '  Ответов API: ' + (info.rawCount || 0) + '\n' +
+        '  С распознанным хешем: ' + (info.validHashCount || 0) +
+        (info.error ? '\n  Ошибка: ' + info.error : '');
+    }
+
     pre.textContent =
-      'IMDb ID: ' + (imdbId || 'не найден в объекте фильма') +
-      '\nРезультаты парсеров:\n' +
-      PARSERS.map(function (p) {
-        var name = p.indexOf('jac.red') !== -1 ? 'JacRed' : 'MaxVol';
-        return name + ': ' + (parserCounts[p] || 0) + ' релизов';
-      }).join('\n') +
-      (parserErrors.length ? '\nОшибки:\n' + parserErrors.join('\n') : '');
+      'Запрос: ' + query +
+      '\nIMDb ID: ' + (imdbId || 'не найден в объекте фильма') +
+      '\n\n' + parserReport(PARSERS[0], 'MaxVol') +
+      '\n\n' + parserReport(PARSERS[1], 'JacRed') +
+      '\n\nСравнение уникальных хешей:\n' +
+      '  Уникальных MaxVol: ' + maxUnique + '\n' +
+      '  Уникальных JacRed: ' + jacUnique + '\n' +
+      '  Совпали в обоих: ' + overlap + '\n' +
+      '  Только MaxVol: ' + maxOnly + '\n' +
+      '  Только JacRed: ' + jacOnly + '\n' +
+      '  Всего после объединения: ' + all.length +
+      (parserErrors.length
+        ? '\n\nОшибки парсеров:\n' + parserErrors.join('\n')
+        : '');
 
     details.appendChild(pre);
     box.appendChild(details);
 
     if (!all.length) {
       var empty = document.createElement('p');
-
       empty.textContent =
         'Раздачи не найдены. Проверь название или доступность парсера.';
 
@@ -1220,6 +1185,7 @@ function openSearch(query, movie) {
 
     all.forEach(function (item) {
       item.cacheState = 'checking';
+      item.cacheFiles = 0;
     });
 
     renderCards(screen);
@@ -1245,7 +1211,6 @@ function addButton(e) {
 
   var movie = e.data.movie;
   var title = movie.title || movie.name || movie.original_title || '';
-
   if (!title) return;
 
   var button = window.jQuery(
@@ -1269,7 +1234,6 @@ function addButton(e) {
     torrent.after(button);
   } else {
     var play = root.find('.full-start__play');
-
     if (play.length) play.after(button);
     else root.find('.full-start__buttons').append(button);
   }
