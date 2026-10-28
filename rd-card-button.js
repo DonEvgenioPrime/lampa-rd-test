@@ -7,7 +7,6 @@ window.__rd_card_button_search = true;
 var PROXY_STORE = 'rd_bridge_worker_url_v1';
 var RD = 'https://api.real-debrid.com/rest/1.0/';
 var STORE = 'rd_bridge_oauth_v2';
-var PARSERS = ['https://jr.maxvol.pro', 'https://jac.red'];
 var SORT_STORE = 'rd_card_button_sort_v1';
 
 var SORT_OPTIONS = [
@@ -16,6 +15,8 @@ var SORT_OPTIONS = [
   { value: 'size_asc', label: 'По размеру (возр.)' },
   { value: 'date', label: 'По дате добавления' }
 ];
+
+/* ---------- Worker и Real-Debrid ---------- */
 
 function getProxyUrl() {
   try {
@@ -50,8 +51,8 @@ function token() {
 function getSortMode() {
   try {
     var value = localStorage.getItem(SORT_STORE) || 'size_asc';
-    return SORT_OPTIONS.some(function (option) {
-      return option.value === value;
+    return SORT_OPTIONS.some(function (o) {
+      return o.value === value;
     }) ? value : 'size_asc';
   } catch (e) {
     return 'size_asc';
@@ -82,21 +83,16 @@ function parseResponse(response) {
     if (!response.ok) {
       throw new Error(
         'HTTP ' + response.status + ': ' +
-        (data.error_description ||
-         data.error ||
-         data.message ||
-         text ||
-         response.statusText)
+        (data.error_description || data.error || data.message ||
+         text || response.statusText)
       );
     }
-
     return data;
   });
 }
 
 function req(url, access, options) {
   options = options || {};
-
   var headers = Object.assign(
     { Accept: 'application/json' },
     options.headers || {}
@@ -136,6 +132,143 @@ function postForm(url, access, values) {
   });
 }
 
+/* ---------- Настройки парсера из Lampa ---------- */
+
+/*
+ * Читаем настройки, выбранные пользователем в Lampa.
+ * Никаких жёстко прописанных MaxVol/JacRed.
+ */
+
+function lampaSetting(key, fallback) {
+  try {
+    if (window.Lampa && Lampa.Storage &&
+        typeof Lampa.Storage.get === 'function') {
+      var value = Lampa.Storage.get(key, fallback);
+      return value === undefined || value === null ? fallback : value;
+    }
+  } catch (e) {}
+
+  return fallback;
+}
+
+function settingEnabled(value) {
+  return value === true || value === 'true' || value === 1;
+}
+
+function normalizeParserUrl(value) {
+  var url = String(value || '').trim();
+  if (!url) return '';
+
+  if (!/^https?:\/\//i.test(url)) {
+    url = (window.location.protocol === 'https:' ? 'https://' : 'http://') + url;
+  }
+
+  try {
+    var parsed = new URL(url);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return '';
+    }
+
+    // Не удаляем возможный путь установки Jackett.
+    return parsed.href.replace(/\/+$/, '');
+  } catch (e) {
+    return '';
+  }
+}
+
+function getParserConfig() {
+  var enabled = settingEnabled(lampaSetting('parser_use', false));
+  var type = String(lampaSetting('parser_torrent_type', 'jackett') || 'jackett')
+    .toLowerCase();
+
+  var primaryUrl = normalizeParserUrl(lampaSetting('jackett_url', ''));
+  var primaryKey = String(lampaSetting('jackett_key', '') || '');
+
+  var secondaryUrl = normalizeParserUrl(
+    lampaSetting('jackett_url_two', '')
+  );
+  var secondaryKey = String(lampaSetting('jackett_key_two', '') || '');
+
+  var selected = String(lampaSetting('parser_use_link', 'one') || 'one')
+    .toLowerCase();
+
+  if (!enabled) {
+    throw new Error(
+      'Парсер отключён в Lampa. Включи «Использовать парсер» в настройках.'
+    );
+  }
+
+  if (type !== 'jackett') {
+    throw new Error(
+      'Выбран тип парсера «' + type +
+      '». Эта версия плагина использует API Jackett. ' +
+      'Выбери Jackett в настройках Lampa.'
+    );
+  }
+
+  var primary = primaryUrl ? {
+    name: 'Основной',
+    url: primaryUrl,
+    key: primaryKey
+  } : null;
+
+  var secondary = secondaryUrl ? {
+    name: 'Дополнительный',
+    url: secondaryUrl,
+    key: secondaryKey
+  } : null;
+
+  var parsers = [];
+
+  if (selected === 'two') {
+    if (secondary) parsers.push(secondary);
+    else if (primary) parsers.push(primary);
+  } else if (selected === 'both') {
+    if (primary) parsers.push(primary);
+    if (secondary) parsers.push(secondary);
+  } else {
+    if (primary) parsers.push(primary);
+  }
+
+  if (!parsers.length) {
+    throw new Error(
+      'В настройках Lampa не найден адрес выбранного Jackett. ' +
+      'Проверь поле «Ссылка» и, если нужно, «Дополнительная ссылка».'
+    );
+  }
+
+  // Убираем дубликат, если обе ссылки ведут на один адрес с одним ключом.
+  var unique = [];
+  var seen = {};
+
+  parsers.forEach(function (parser) {
+    var id = parser.url + '|' + parser.key;
+    if (!seen[id]) {
+      seen[id] = true;
+      unique.push(parser);
+    }
+  });
+
+  return {
+    type: type,
+    selected: selected,
+    parsers: unique
+  };
+}
+
+function buildJackettUrl(parser, query) {
+  var url = parser.url + '/api/v2.0/indexers/all/results';
+  var params = new URLSearchParams();
+
+  params.set('apikey', parser.key);
+  params.set('Query', query);
+  params.set('Category', '2000,5000');
+
+  return url + '?' + params.toString();
+}
+
+/* ---------- Информация о фильме и magnet ---------- */
+
 function normalizeImdb(value) {
   var match = String(value || '').match(/tt\d+/i);
   return match ? match[0].toLowerCase() : '';
@@ -147,13 +280,8 @@ function getImdbId(movie) {
   var external = movie.external_ids || {};
 
   var candidates = [
-    movie.imdb_id,
-    movie.imdbId,
-    movie.imdb,
-    movie.imdbid,
-    ids.imdb,
-    ids.imdb_id,
-    external.imdb_id,
+    movie.imdb_id, movie.imdbId, movie.imdb, movie.imdbid,
+    ids.imdb, ids.imdb_id, external.imdb_id,
     movie.source && movie.source.imdb_id
   ];
 
@@ -161,7 +289,6 @@ function getImdbId(movie) {
     var id = normalizeImdb(candidates[i]);
     if (id) return id;
   }
-
   return '';
 }
 
@@ -174,8 +301,7 @@ function hashOf(x) {
   }
 
   var m = String(
-    x.MagnetUri || x.magnetUri ||
-    x.magnet || x.link || x.Link || ''
+    x.MagnetUri || x.magnetUri || x.magnet || x.link || x.Link || ''
   ).match(/urn:btih:([a-f0-9]{40})/i);
 
   return m ? m[1].toLowerCase() : '';
@@ -183,32 +309,21 @@ function hashOf(x) {
 
 function magnetOf(item) {
   var raw = item.raw || {};
-
   var candidates = [
-    raw.MagnetUri,
-    raw.magnetUri,
-    raw.magnet,
-    raw.Magnet,
-    raw.link,
-    raw.Link,
-    raw.downloadUrl,
-    raw.DownloadUrl
+    raw.MagnetUri, raw.magnetUri, raw.magnet, raw.Magnet,
+    raw.link, raw.Link, raw.downloadUrl, raw.DownloadUrl
   ];
 
   for (var i = 0; i < candidates.length; i++) {
     var value = String(candidates[i] || '').trim();
-
     if (/^magnet:\?/i.test(value) && /urn:btih:/i.test(value)) {
       return value;
     }
   }
 
-  if (!item.hash || !/^[a-f0-9]{40}$/i.test(item.hash)) {
-    return '';
-  }
+  if (!item.hash || !/^[a-f0-9]{40}$/i.test(item.hash)) return '';
 
-  return 'magnet:?xt=urn:btih:' +
-    item.hash +
+  return 'magnet:?xt=urn:btih:' + item.hash +
     '&dn=' + encodeURIComponent(item.title || 'Torrent');
 }
 
@@ -236,9 +351,7 @@ function magnetDiagnostic(item) {
 function firstValue(obj, names) {
   for (var i = 0; i < names.length; i++) {
     var value = obj && obj[names[i]];
-    if (value !== undefined && value !== null && value !== '') {
-      return value;
-    }
+    if (value !== undefined && value !== null && value !== '') return value;
   }
   return '';
 }
@@ -258,20 +371,10 @@ function parseDateValue(value) {
   return isNaN(parsed) ? 0 : parsed;
 }
 
-/*
- * Ищем на MaxVol и JacRed.
- * rawCount — все результаты API до фильтрации.
- * validHashCount — результаты, для которых удалось определить hash.
- */
-function search(host, q, access) {
-  var isJacRed = host.indexOf('jac.red') !== -1;
-  var url = isJacRed
-    ? host + '/api/v2.0/indexers/all/results?apikey=&Query=' +
-      encodeURIComponent(q)
-    : host + '/api/v2.0/indexers/all/results?Query=' +
-      encodeURIComponent(q) + '&Category=2000,5000';
+/* ---------- Поиск через выбранный Jackett ---------- */
 
-  var sourceName = isJacRed ? 'JacRed' : 'MaxVol';
+function search(parser, query, access) {
+  var url = buildJackettUrl(parser, query);
 
   return req(url, access).then(function (data) {
     var list = Array.isArray(data)
@@ -279,24 +382,19 @@ function search(host, q, access) {
       : (data.Results || data.results || []);
 
     if (!Array.isArray(list)) {
-      throw new Error('Ответ парсера не содержит массива результатов');
+      throw new Error('Ответ парсера не содержит массива Results');
     }
 
     var mapped = list.map(function (x) {
       var rawSize = firstValue(x, ['Size', 'size', 'length']);
-
-      var rawSeeders = firstValue(x, [
-        'Seeders', 'seeders', 'Seeds', 'seeds'
-      ]);
-
-      var rawLeechers = firstValue(x, [
-        'Peers', 'peers', 'Leechers', 'leechers'
-      ]);
-
+      var rawSeeders = firstValue(x, ['Seeders', 'seeders', 'Seeds', 'seeds']);
+      var rawLeechers = firstValue(
+        x, ['Peers', 'peers', 'Leechers', 'leechers']
+      );
       var rawDate = firstValue(x, [
-        'PublishDate', 'publishDate', 'publish_date',
-        'Date', 'date', 'Added', 'added',
-        'Created', 'created', 'CreationDate', 'creationDate'
+        'PublishDate', 'publishDate', 'publish_date', 'Date', 'date',
+        'Added', 'added', 'Created', 'created',
+        'CreationDate', 'creationDate'
       ]);
 
       var item = {
@@ -307,8 +405,8 @@ function search(host, q, access) {
         leechers: Number(rawLeechers) || 0,
         tracker: x.Tracker || x.tracker || '',
         dateAdded: parseDateValue(rawDate),
-        source: sourceName,
-        sources: [sourceName],
+        source: parser.name,
+        sources: [parser.name],
         raw: x
       };
 
@@ -320,7 +418,6 @@ function search(host, q, access) {
       return !!item.hash;
     });
 
-    // Дополнительные показатели для диагностики.
     valid.rawCount = list.length;
     valid.validHashCount = valid.length;
 
@@ -328,36 +425,32 @@ function search(host, q, access) {
   });
 }
 
+/* ---------- Сортировка ---------- */
+
 function sortItems(items, mode) {
   var rows = items.slice();
 
   rows.sort(function (a, b) {
     if (mode === 'seeders') {
-      return (b.seeders - a.seeders) ||
-        (b.size - a.size) ||
+      return (b.seeders - a.seeders) || (b.size - a.size) ||
         a.title.localeCompare(b.title);
     }
 
     if (mode === 'size_desc') {
-      return (b.size - a.size) ||
-        (b.seeders - a.seeders) ||
+      return (b.size - a.size) || (b.seeders - a.seeders) ||
         a.title.localeCompare(b.title);
     }
 
     if (mode === 'size_asc') {
-      return (a.size - b.size) ||
-        (b.seeders - a.seeders) ||
+      return (a.size - b.size) || (b.seeders - a.seeders) ||
         a.title.localeCompare(b.title);
     }
 
     if (mode === 'date') {
-      if (a.dateAdded && b.dateAdded) {
-        return b.dateAdded - a.dateAdded;
-      }
+      if (a.dateAdded && b.dateAdded) return b.dateAdded - a.dateAdded;
       if (a.dateAdded) return -1;
       if (b.dateAdded) return 1;
-      return (b.seeders - a.seeders) ||
-        a.title.localeCompare(b.title);
+      return (b.seeders - a.seeders) || a.title.localeCompare(b.title);
     }
 
     return 0;
@@ -365,6 +458,8 @@ function sortItems(items, mode) {
 
   return rows;
 }
+
+/* ---------- Проверка DMM ---------- */
 
 function checkDMM(imdbId, hashes, access) {
   if (!imdbId) {
@@ -400,42 +495,26 @@ function checkDMM(imdbId, hashes, access) {
 
 function findHashResult(data, hash) {
   var wanted = String(hash || '').toLowerCase();
-
   if (!data || !Array.isArray(data.available)) return null;
 
   for (var i = 0; i < data.available.length; i++) {
     var item = data.available[i];
-
     if (item && String(item.hash || '').toLowerCase() === wanted) {
       return item;
     }
   }
-
   return null;
 }
 
-/*
- * Отсутствие результата или пустой files не доказывает,
- * что раздача не закеширована. Поэтому такие ответы — unknown.
- */
 function classifyCache(result) {
   if (!result || typeof result !== 'object') return 'unknown';
-
-  if (Array.isArray(result.files) && result.files.length > 0) {
-    return 'cached';
-  }
-
+  if (Array.isArray(result.files) && result.files.length > 0) return 'cached';
   return 'unknown';
 }
 
 function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
-    return {
-      '&': '&amp;',
-      '<': '&lt;',
-      '>': '&gt;',
-      '"': '&quot;'
-    }[c];
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
   });
 }
 
@@ -450,7 +529,6 @@ function formatSize(n) {
     n /= 1024;
     i++;
   }
-
   return n.toFixed(i > 1 ? 1 : 0) + ' ' + units[i];
 }
 
@@ -467,9 +545,10 @@ function statusText(status) {
     uploading: 'RD обрабатывает файлы',
     dead: 'Раздача недоступна'
   };
-
   return labels[status] || ('Статус RD: ' + (status || 'неизвестен'));
 }
+
+/* ---------- Получение RD_USER_ID ---------- */
 
 function getRDUserId(screen, button) {
   var access = token();
@@ -547,17 +626,23 @@ function getRDUserId(screen, button) {
   });
 }
 
-/* Обновление метки из сохранённого состояния item. */
+/* ---------- Метки состояния DMM ---------- */
+
 function updateCacheLabel(screen, item) {
-  var node = screen.querySelector(
-    '[data-cache-hash="' + item.hash + '"]'
-  );
+  var nodes = screen.querySelectorAll('[data-cache-hash]');
+  var node = null;
+
+  for (var i = 0; i < nodes.length; i++) {
+    if (nodes[i].getAttribute('data-cache-hash') === item.hash) {
+      node = nodes[i];
+      break;
+    }
+  }
 
   if (!node) return;
 
   if (item.cacheState === 'cached') {
-    node.textContent =
-      'Проверка кеша: DMM · подтверждён (' +
+    node.textContent = 'Проверка кеша: DMM · подтверждён (' +
       (Number(item.cacheFiles) || 0) + ' файлов)';
     node.style.color = '#72e6a2';
   } else if (item.cacheState === 'error') {
@@ -579,13 +664,11 @@ function runCacheCheck(items, imdbId, access, screen) {
   if (!imdbId) {
     status.textContent =
       'Кеш не проверен: IMDb ID не найден в данных фильма.';
-
     items.forEach(function (item) {
       item.cacheState = 'unknown';
       item.cacheFiles = 0;
       updateCacheLabel(screen, item);
     });
-
     renderCards(screen);
     return;
   }
@@ -601,8 +684,7 @@ function runCacheCheck(items, imdbId, access, screen) {
   }
 
   status.textContent =
-    'Проверяем DMM · IMDb: ' + imdbId +
-    ' · раздач: ' + items.length;
+    'Проверяем DMM · IMDb: ' + imdbId + ' · раздач: ' + items.length;
 
   var cachedCount = 0;
   var unknownCount = 0;
@@ -612,9 +694,7 @@ function runCacheCheck(items, imdbId, access, screen) {
     return chain.then(function () {
       return checkDMM(
         imdbId,
-        batch.map(function (item) {
-          return item.hash;
-        }),
+        batch.map(function (item) { return item.hash; }),
         access
       ).then(function (data) {
         if (!screen.isConnected) return;
@@ -628,21 +708,16 @@ function runCacheCheck(items, imdbId, access, screen) {
           var state = classifyCache(result);
 
           item.cacheState = state;
-          item.cacheFiles =
-            state === 'cached' ? result.files.length : 0;
+          item.cacheFiles = state === 'cached' ? result.files.length : 0;
 
-          if (state === 'cached') {
-            cachedCount++;
-          } else {
-            unknownCount++;
-          }
+          if (state === 'cached') cachedCount++;
+          else unknownCount++;
 
           updateCacheLabel(screen, item);
         });
       });
     }).catch(function (err) {
       errors.push(err.message);
-
       batch.forEach(function (item) {
         item.cacheState = 'error';
         item.cacheFiles = 0;
@@ -658,7 +733,6 @@ function runCacheCheck(items, imdbId, access, screen) {
       (errors.length ? ' · ошибок: ' + errors.length : '');
 
     var diag = screen.querySelector('#rd-dmm-diagnostic');
-
     if (diag) {
       diag.textContent =
         'IMDb ID: ' + imdbId +
@@ -672,9 +746,8 @@ function runCacheCheck(items, imdbId, access, screen) {
   });
 }
 
-/*
- * Защита от повторной отправки magnet.
- */
+/* ---------- Добавление magnet в RD ---------- */
+
 function testOne(item, button, resultNode) {
   var access = token();
 
@@ -695,15 +768,13 @@ function testOne(item, button, resultNode) {
   var magnet = item.magnet || magnetOf(item);
 
   if (!magnet) {
-    resultNode.textContent =
-      'Не удалось получить magnet-ссылку или hash.';
+    resultNode.textContent = 'Не удалось получить magnet-ссылку или hash.';
     return;
   }
 
   if (!window.confirm(
     'Добавить раздачу в Real-Debrid?\n\n' +
-    item.title + '\n\n' +
-    'Магнит будет отправлен в твой аккаунт RD. Продолжить?'
+    item.title + '\n\nМагнит будет отправлен в твой аккаунт RD. Продолжить?'
   )) return;
 
   button.dataset.rdBusy = '1';
@@ -715,31 +786,22 @@ function testOne(item, button, resultNode) {
     magnet: magnet
   }).then(function (response) {
     if (!response || !response.id) {
-      throw new Error(
-        'RD не вернул ID задачи: ' + JSON.stringify(response)
-      );
+      throw new Error('RD не вернул ID задачи: ' + JSON.stringify(response));
     }
 
     var id = String(response.id);
     button.dataset.rdTaskCreated = id;
     button.textContent = 'Задача создана';
-
-    resultNode.textContent =
-      'Задача создана: ' + id + '\nВыбираем все файлы…';
+    resultNode.textContent = 'Задача создана: ' + id + '\nВыбираем все файлы…';
 
     return postForm(
       RD + 'torrents/selectFiles/' + encodeURIComponent(id),
       access,
       { files: 'all' }
     ).then(function () {
-      return req(
-        RD + 'torrents/info/' + encodeURIComponent(id),
-        access
-      );
+      return req(RD + 'torrents/info/' + encodeURIComponent(id), access);
     }).then(function (info) {
-      resultNode.textContent =
-        statusText(info.status) + '\nID задачи RD: ' + id;
-
+      resultNode.textContent = statusText(info.status) + '\nID задачи RD: ' + id;
       button.textContent = 'Задача создана';
       button.disabled = true;
     }).catch(function (err) {
@@ -747,7 +809,6 @@ function testOne(item, button, resultNode) {
         'Задача RD создана: ' + id +
         '\nОшибка выбора файлов или проверки: ' + err.message +
         '\nПроверь задачу в RD вручную, прежде чем повторять добавление.';
-
       button.textContent = 'Задача создана';
       button.disabled = true;
     });
@@ -755,19 +816,17 @@ function testOne(item, button, resultNode) {
     button.dataset.rdBusy = '0';
     button.disabled = true;
     button.textContent = 'Проверь задачу RD';
-
     resultNode.textContent =
-      'Не удалось подтвердить результат добавления: ' +
-      err.message +
+      'Не удалось подтвердить результат добавления: ' + err.message +
       '\nВозможно, RD успел создать задачу.' +
       '\nПроверь список задач Real-Debrid перед повторной отправкой.';
   });
 }
 
-/* Меню сортировки. */
+/* ---------- Меню сортировки ---------- */
+
 function openSortMenu(screen) {
   var old = screen.querySelector('#rd-sort-menu');
-
   if (old) {
     old.remove();
     return;
@@ -820,13 +879,14 @@ function openSortMenu(screen) {
   });
 
   menu.appendChild(panel);
-
   menu.addEventListener('click', function (event) {
     if (event.target === menu) menu.remove();
   });
 
   screen.appendChild(menu);
 }
+
+/* ---------- Карточки результатов ---------- */
 
 function renderCards(screen) {
   var all = screen.__rdItems || [];
@@ -836,8 +896,8 @@ function renderCards(screen) {
   var mode = getSortMode();
   var sorted = sortItems(all, mode);
 
-  var selected = SORT_OPTIONS.filter(function (option) {
-    return option.value === mode;
+  var selected = SORT_OPTIONS.filter(function (o) {
+    return o.value === mode;
   })[0];
 
   var sortInfo = screen.querySelector('#rd-sort-current');
@@ -849,7 +909,6 @@ function renderCards(screen) {
     if (!card) {
       card = document.createElement('div');
       item._rdCard = card;
-
       card.style.cssText =
         'padding:14px;margin:10px 0;background:#303030;' +
         'border-radius:8px;line-height:1.5;overflow-wrap:anywhere';
@@ -866,7 +925,6 @@ function renderCards(screen) {
       if (item.size) bits.push(formatSize(item.size));
       bits.push('Сиды: ' + item.seeders);
       if (item.tracker) bits.push(item.tracker);
-
       if (item.dateAdded) {
         bits.push('Дата: ' + new Date(item.dateAdded).toLocaleDateString());
       }
@@ -876,8 +934,7 @@ function renderCards(screen) {
 
       var sourceLabel = document.createElement('div');
       sourceLabel.setAttribute('data-source-label', '1');
-      sourceLabel.style.cssText =
-        'opacity:.9;font-size:.9em;margin-top:4px';
+      sourceLabel.style.cssText = 'opacity:.9;font-size:.9em;margin-top:4px';
       card.appendChild(sourceLabel);
 
       var diagDetails = document.createElement('details');
@@ -912,17 +969,14 @@ function renderCards(screen) {
       var button = document.createElement('button');
       button.type = 'button';
       button.textContent = 'Добавить и выбрать файлы';
-
       button.style.cssText =
-        'display:block;position:relative;z-index:1;' +
-        'margin-top:10px;padding:12px 14px;border:0;' +
-        'border-radius:6px;background:#7a5cff;color:#fff;' +
-        'cursor:pointer;touch-action:manipulation';
+        'display:block;position:relative;z-index:1;margin-top:10px;' +
+        'padding:12px 14px;border:0;border-radius:6px;' +
+        'background:#7a5cff;color:#fff;cursor:pointer;touch-action:manipulation';
 
       var result = document.createElement('div');
       result.style.cssText =
-        'margin-top:8px;white-space:pre-wrap;' +
-        'overflow-wrap:anywhere;font-size:.9em';
+        'margin-top:8px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:.9em';
 
       button.addEventListener('click', function (event) {
         event.preventDefault();
@@ -937,17 +991,15 @@ function renderCards(screen) {
     var sourceLabel = card.querySelector('[data-source-label]');
     if (sourceLabel) {
       sourceLabel.textContent =
-        'Источник: ' +
-        (item.sources || [item.source || 'неизвестен']).join(' + ');
+        'Источник: ' + (item.sources || [item.source || 'неизвестен']).join(' + ');
     }
 
-    // Число файлов берётся из item.cacheFiles, а не теряется
-    // при повторном вызове renderCards().
     updateCacheLabel(screen, item);
-
     box.appendChild(card);
   });
 }
+
+/* ---------- Поиск и объединение результатов ---------- */
 
 function openSearch(query, movie) {
   var access = token();
@@ -964,13 +1016,20 @@ function openSearch(query, movie) {
     return;
   }
 
+  var config;
+  try {
+    config = getParserConfig();
+  } catch (e) {
+    note(e.message);
+    return;
+  }
+
   var imdbId = getImdbId(movie);
   var old = document.getElementById('rd-card-search');
   if (old) old.remove();
 
   var screen = document.createElement('div');
   screen.id = 'rd-card-search';
-
   screen.style.cssText =
     'position:fixed;z-index:999999;inset:0;overflow:auto;' +
     'background:#171717;color:#fff;padding:20px;box-sizing:border-box;' +
@@ -978,35 +1037,25 @@ function openSearch(query, movie) {
 
   screen.innerHTML =
     '<div style="max-width:950px;margin:auto">' +
-      '<div style="display:flex;justify-content:space-between;' +
-      'align-items:center;gap:12px;flex-wrap:wrap">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">' +
         '<h2>Real-Debrid — поиск раздач</h2>' +
         '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
           '<button id="rd-get-id">Получить RD_USER_ID</button>' +
           '<button id="rd-close">Закрыть</button>' +
         '</div>' +
       '</div>' +
-      '<div style="display:flex;align-items:center;gap:10px;' +
-      'flex-wrap:wrap;margin:12px 0">' +
-        '<button id="rd-sort-button" style="padding:10px 14px;' +
-        'border:1px solid #666;border-radius:8px;background:#333;' +
-        'color:#fff;cursor:pointer;touch-action:manipulation">Сортировка</button>' +
-        '<span style="opacity:.8">Текущая: ' +
-        '<span id="rd-sort-current"></span></span>' +
+      '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0">' +
+        '<button id="rd-sort-button" style="padding:10px 14px;border:1px solid #666;border-radius:8px;background:#333;color:#fff;cursor:pointer;touch-action:manipulation">Сортировка</button>' +
+        '<span style="opacity:.8">Текущая: <span id="rd-sort-current"></span></span>' +
       '</div>' +
       '<p id="rd-status">Ищем: ' + esc(query) + '</p>' +
-      '<div style="padding:12px;background:#333;border-radius:8px;' +
-      'line-height:1.5;margin-bottom:14px">' +
-        'Зелёная метка означает, что DMM вернул хэш в available ' +
-        'с непустым списком files. Это подтверждение по ответу DMM, ' +
-        'но не гарантия будущего воспроизведения. Отсутствие подтверждения ' +
-        'не доказывает отсутствие кеша в Real-Debrid.' +
+      '<div style="padding:12px;background:#333;border-radius:8px;line-height:1.5;margin-bottom:14px">' +
+        'Источники берутся из настроек парсера Lampa. Зелёная метка означает, что DMM вернул хэш в available с непустым files. Отсутствие подтверждения не доказывает отсутствие кеша в Real-Debrid.' +
       '</div>' +
       '<div id="rd-results"></div>' +
       '<details style="margin-top:16px;padding:12px;background:#292929;border-radius:8px">' +
         '<summary>Ответ DMM / диагностика</summary>' +
-        '<pre id="rd-dmm-diagnostic" style="white-space:pre-wrap;' +
-        'overflow-wrap:anywhere;font:12px monospace"></pre>' +
+        '<pre id="rd-dmm-diagnostic" style="white-space:pre-wrap;overflow-wrap:anywhere;font:12px monospace"></pre>' +
       '</details>' +
     '</div>';
 
@@ -1029,9 +1078,12 @@ function openSearch(query, movie) {
   var parserStats = {};
   var parserErrors = [];
 
-  Promise.all(PARSERS.map(function (host) {
-    return search(host, query, access).then(function (rows) {
-      parserStats[host] = {
+  screen.querySelector('#rd-status').textContent =
+    'Ищем: ' + query + ' · источников: ' + config.parsers.length;
+
+  Promise.all(config.parsers.map(function (parser) {
+    return search(parser, query, access).then(function (rows) {
+      parserStats[parser.name] = {
         rawCount: rows.rawCount || 0,
         validHashCount: rows.validHashCount || rows.length,
         rows: rows,
@@ -1039,18 +1091,14 @@ function openSearch(query, movie) {
       };
       return rows;
     }).catch(function (err) {
-      parserStats[host] = {
+      parserStats[parser.name] = {
         rawCount: 0,
         validHashCount: 0,
         rows: [],
         error: err.message
       };
 
-      parserErrors.push(
-        (host.indexOf('jac.red') !== -1 ? 'JacRed' : 'MaxVol') +
-        ': ' + err.message
-      );
-
+      parserErrors.push(parser.name + ': ' + err.message);
       return [];
     });
   })).then(function (groups) {
@@ -1065,15 +1113,12 @@ function openSearch(query, movie) {
         if (!key) return;
 
         if (!seen[key]) {
-          item.sources =
-            (item.sources || [item.source || 'неизвестен']).slice();
-
+          item.sources = (item.sources || [item.source || 'неизвестен']).slice();
           seen[key] = item;
           all.push(item);
         } else {
           var existing = seen[key];
-          var incomingSources =
-            item.sources || [item.source || 'неизвестен'];
+          var incomingSources = item.sources || [item.source || 'неизвестен'];
 
           incomingSources.forEach(function (source) {
             if (existing.sources.indexOf(source) === -1) {
@@ -1081,12 +1126,7 @@ function openSearch(query, movie) {
             }
           });
 
-          existing.sources.sort(function (a, b) {
-            var order = { MaxVol: 0, JacRed: 1 };
-            return (order[a] === undefined ? 99 : order[a]) -
-              (order[b] === undefined ? 99 : order[b]);
-          });
-
+          existing.sources.sort();
           existing.source = existing.sources.join(' + ');
 
           if (!existing.magnet && item.magnet) existing.magnet = item.magnet;
@@ -1102,35 +1142,6 @@ function openSearch(query, movie) {
 
     screen.__rdItems = all;
 
-    var maxStats = parserStats[PARSERS[0]] || {
-      rows: [], rawCount: 0, validHashCount: 0
-    };
-    var jacStats = parserStats[PARSERS[1]] || {
-      rows: [], rawCount: 0, validHashCount: 0
-    };
-
-    var maxHashes = {};
-    var jacHashes = {};
-
-    maxStats.rows.forEach(function (item) {
-      maxHashes[item.hash] = true;
-    });
-
-    jacStats.rows.forEach(function (item) {
-      jacHashes[item.hash] = true;
-    });
-
-    var maxUnique = Object.keys(maxHashes).length;
-    var jacUnique = Object.keys(jacHashes).length;
-    var overlap = 0;
-
-    Object.keys(maxHashes).forEach(function (hash) {
-      if (jacHashes[hash]) overlap++;
-    });
-
-    var maxOnly = maxUnique - overlap;
-    var jacOnly = jacUnique - overlap;
-
     var box = screen.querySelector('#rd-results');
     var details = document.createElement('details');
     details.id = 'rd-search-diagnostics';
@@ -1145,38 +1156,38 @@ function openSearch(query, movie) {
     pre.style.cssText =
       'white-space:pre-wrap;overflow-wrap:anywhere;font:13px monospace';
 
-    function parserReport(host, label) {
-      var info = parserStats[host] || {};
-      return label + ':\n' +
-        '  Ответов API: ' + (info.rawCount || 0) + '\n' +
-        '  С распознанным хешем: ' + (info.validHashCount || 0) +
-        (info.error ? '\n  Ошибка: ' + info.error : '');
+    var report = [
+      'Запрос: ' + query,
+      'IMDb ID: ' + (imdbId || 'не найден в объекте фильма'),
+      'Тип парсера Lampa: ' + config.type,
+      'Выбор ссылки Lampa: ' + config.selected,
+      'Источников запрошено: ' + config.parsers.length
+    ];
+
+    config.parsers.forEach(function (parser) {
+      var info = parserStats[parser.name] || {};
+      report.push(
+        '\n' + parser.name + ' (' + parser.url + '):' +
+        '\n  Ответов API: ' + (info.rawCount || 0) +
+        '\n  С распознанным хешем: ' + (info.validHashCount || 0) +
+        (info.error ? '\n  Ошибка: ' + info.error : '')
+      );
+    });
+
+    report.push('\nВсего уникальных хешей после объединения: ' + all.length);
+
+    if (parserErrors.length) {
+      report.push('\nОшибки источников:\n' + parserErrors.join('\n'));
     }
 
-    pre.textContent =
-      'Запрос: ' + query +
-      '\nIMDb ID: ' + (imdbId || 'не найден в объекте фильма') +
-      '\n\n' + parserReport(PARSERS[0], 'MaxVol') +
-      '\n\n' + parserReport(PARSERS[1], 'JacRed') +
-      '\n\nСравнение уникальных хешей:\n' +
-      '  Уникальных MaxVol: ' + maxUnique + '\n' +
-      '  Уникальных JacRed: ' + jacUnique + '\n' +
-      '  Совпали в обоих: ' + overlap + '\n' +
-      '  Только MaxVol: ' + maxOnly + '\n' +
-      '  Только JacRed: ' + jacOnly + '\n' +
-      '  Всего после объединения: ' + all.length +
-      (parserErrors.length
-        ? '\n\nОшибки парсеров:\n' + parserErrors.join('\n')
-        : '');
-
+    pre.textContent = report.join('\n');
     details.appendChild(pre);
     box.appendChild(details);
 
     if (!all.length) {
       var empty = document.createElement('p');
       empty.textContent =
-        'Раздачи не найдены. Проверь название или доступность парсера.';
-
+        'Раздачи не найдены. Проверь URL, API-ключ и настройки парсера Lampa.';
       box.appendChild(empty);
       screen.querySelector('#rd-status').textContent = 'Раздачи не найдены.';
       return;
@@ -1197,13 +1208,14 @@ function openSearch(query, movie) {
   });
 }
 
+/* ---------- Кнопка в карточке фильма Lampa ---------- */
+
 function addButton(e) {
   if (!e || e.type !== 'complite' || !e.data || !e.data.movie) return;
 
-  var root = e.object && e.object.activity &&
-    e.object.activity.render
-      ? e.object.activity.render()
-      : null;
+  var root = e.object && e.object.activity && e.object.activity.render
+    ? e.object.activity.render()
+    : null;
 
   if (!root || !root.length || !window.jQuery ||
       root.find('.view--realdebrid').length) return;
