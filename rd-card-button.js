@@ -166,18 +166,23 @@ function settingEnabled(value) {
     value === '1';
 }
 
+/*
+ * ИСПРАВЛЕНО:
+ * URL без протокола всегда получает HTTPS.
+ * Это необходимо, потому что Worker требует HTTPS.
+ */
 function normalizeParserUrl(value) {
   var url = String(value || '').trim();
   if (!url) return '';
 
   if (!/^https?:\/\//i.test(url)) {
-    url = (window.location.protocol === 'https:' ? 'https://' : 'http://') + url;
+    url = 'https://' + url;
   }
 
   try {
     var parsed = new URL(url);
 
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    if (parsed.protocol !== 'https:') {
       return '';
     }
 
@@ -190,7 +195,7 @@ function normalizeParserUrl(value) {
 
 /*
  * Нормализация вариантов значения parser_use_link.
- * Адреса парсеров здесь не задаются.
+ * Адреса парсеров в плагине не прописываются.
  */
 function normalizeLinkSelection(value) {
   value = String(value == null ? 'one' : value)
@@ -240,7 +245,14 @@ function getParserConfig() {
     lampaSetting('jackett_key_two', '') || ''
   ).trim();
 
-  var selected = normalizeLinkSelection(settings.parser_use_link);
+  /*
+   * ИСПРАВЛЕНО:
+   * Если Lampa вернула пустой parser_use_link,
+   * используем основную ссылку.
+   */
+  var selected = normalizeLinkSelection(
+    settings.parser_use_link || 'one'
+  );
 
   if (!enabled) {
     throw new Error(
@@ -901,7 +913,7 @@ function testOne(item, button, resultNode) {
       resultNode.textContent =
         'Задача RD создана: ' + id +
         '\nОшибка выбора файлов или проверки: ' + err.message +
-        '\nПроверь задачу в RD вручную, прежде чем повторять добавление.';
+        '\nПроверь задачу RD вручную, прежде чем повторять добавление.';
 
       button.textContent = 'Задача создана';
       button.disabled = true;
@@ -1186,7 +1198,6 @@ function openSearch(query, movie) {
 
   var parserStats = {};
   var parserErrors = [];
-
   var settingsDiagnostic = getParserSettingsDiagnostic();
 
   console.log('[RD Card Button] Настройки парсера:', settingsDiagnostic);
