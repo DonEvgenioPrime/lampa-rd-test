@@ -22,8 +22,10 @@ function getProxyUrl() {
   try {
     var value = (localStorage.getItem(PROXY_STORE) || '').trim();
     if (!value) return '';
+
     var url = new URL(value);
     if (url.protocol !== 'https:') return '';
+
     return url.href.replace(/\/+$/, '') + '/';
   } catch (e) {
     return '';
@@ -32,11 +34,13 @@ function getProxyUrl() {
 
 function requireProxy() {
   var proxy = getProxyUrl();
+
   if (!proxy) {
     throw new Error(
       'Сначала укажи URL своего Cloudflare Worker в настройках Real-Debrid.'
     );
   }
+
   return proxy;
 }
 
@@ -51,6 +55,7 @@ function token() {
 function getSortMode() {
   try {
     var value = localStorage.getItem(SORT_STORE) || 'size_asc';
+
     return SORT_OPTIONS.some(function (o) {
       return o.value === value;
     }) ? value : 'size_asc';
@@ -74,6 +79,7 @@ function note(s) {
 function parseResponse(response) {
   return response.text().then(function (text) {
     var data;
+
     try {
       data = text ? JSON.parse(text) : {};
     } catch (e) {
@@ -87,12 +93,14 @@ function parseResponse(response) {
          text || response.statusText)
       );
     }
+
     return data;
   });
 }
 
 function req(url, access, options) {
   options = options || {};
+
   var headers = Object.assign(
     { Accept: 'application/json' },
     options.headers || {}
@@ -101,6 +109,7 @@ function req(url, access, options) {
   if (access) headers.Authorization = 'Bearer ' + access;
 
   var proxy;
+
   try {
     proxy = requireProxy();
   } catch (e) {
@@ -134,16 +143,15 @@ function postForm(url, access, values) {
 
 /* ---------- Настройки парсера из Lampa ---------- */
 
-/*
- * Читаем настройки, выбранные пользователем в Lampa.
- * Никаких жёстко прописанных MaxVol/JacRed.
- */
-
 function lampaSetting(key, fallback) {
   try {
-    if (window.Lampa && Lampa.Storage &&
-        typeof Lampa.Storage.get === 'function') {
+    if (
+      window.Lampa &&
+      Lampa.Storage &&
+      typeof Lampa.Storage.get === 'function'
+    ) {
       var value = Lampa.Storage.get(key, fallback);
+
       return value === undefined || value === null ? fallback : value;
     }
   } catch (e) {}
@@ -152,7 +160,10 @@ function lampaSetting(key, fallback) {
 }
 
 function settingEnabled(value) {
-  return value === true || value === 'true' || value === 1;
+  return value === true ||
+    value === 'true' ||
+    value === 1 ||
+    value === '1';
 }
 
 function normalizeParserUrl(value) {
@@ -165,32 +176,71 @@ function normalizeParserUrl(value) {
 
   try {
     var parsed = new URL(url);
+
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
       return '';
     }
 
-    // Не удаляем возможный путь установки Jackett.
+    // Сохраняем путь установки Jackett, если он есть.
     return parsed.href.replace(/\/+$/, '');
   } catch (e) {
     return '';
   }
 }
 
+/*
+ * Нормализация вариантов значения parser_use_link.
+ * Адреса парсеров здесь не задаются.
+ */
+function normalizeLinkSelection(value) {
+  value = String(value == null ? 'one' : value)
+    .trim()
+    .toLowerCase();
+
+  if (['two', '2', 'secondary', 'second'].indexOf(value) !== -1) {
+    return 'two';
+  }
+
+  if (
+    ['both', 'all', '1,2', 'one_two'].indexOf(value) !== -1
+  ) {
+    return 'both';
+  }
+
+  return 'one';
+}
+
+function getParserSettingsDiagnostic() {
+  return {
+    parser_use: lampaSetting('parser_use', null),
+    parser_torrent_type: lampaSetting('parser_torrent_type', null),
+    parser_use_link: lampaSetting('parser_use_link', null),
+    jackett_url: lampaSetting('jackett_url', ''),
+    jackett_url_two: lampaSetting('jackett_url_two', ''),
+    primaryKeyConfigured: !!lampaSetting('jackett_key', ''),
+    secondaryKeyConfigured: !!lampaSetting('jackett_key_two', '')
+  };
+}
+
 function getParserConfig() {
-  var enabled = settingEnabled(lampaSetting('parser_use', false));
-  var type = String(lampaSetting('parser_torrent_type', 'jackett') || 'jackett')
-    .toLowerCase();
+  var settings = getParserSettingsDiagnostic();
 
-  var primaryUrl = normalizeParserUrl(lampaSetting('jackett_url', ''));
-  var primaryKey = String(lampaSetting('jackett_key', '') || '');
+  var enabled = settingEnabled(settings.parser_use);
+  var type = String(
+    settings.parser_torrent_type || 'jackett'
+  ).trim().toLowerCase();
 
-  var secondaryUrl = normalizeParserUrl(
-    lampaSetting('jackett_url_two', '')
-  );
-  var secondaryKey = String(lampaSetting('jackett_key_two', '') || '');
+  var primaryUrl = normalizeParserUrl(settings.jackett_url);
+  var primaryKey = String(
+    lampaSetting('jackett_key', '') || ''
+  ).trim();
 
-  var selected = String(lampaSetting('parser_use_link', 'one') || 'one')
-    .toLowerCase();
+  var secondaryUrl = normalizeParserUrl(settings.jackett_url_two);
+  var secondaryKey = String(
+    lampaSetting('jackett_key_two', '') || ''
+  ).trim();
+
+  var selected = normalizeLinkSelection(settings.parser_use_link);
 
   if (!enabled) {
     throw new Error(
@@ -221,8 +271,13 @@ function getParserConfig() {
   var parsers = [];
 
   if (selected === 'two') {
-    if (secondary) parsers.push(secondary);
-    else if (primary) parsers.push(primary);
+    if (secondary) {
+      parsers.push(secondary);
+    } else {
+      throw new Error(
+        'Выбрана дополнительная ссылка, но она не задана в настройках Lampa.'
+      );
+    }
   } else if (selected === 'both') {
     if (primary) parsers.push(primary);
     if (secondary) parsers.push(secondary);
@@ -232,17 +287,16 @@ function getParserConfig() {
 
   if (!parsers.length) {
     throw new Error(
-      'В настройках Lampa не найден адрес выбранного Jackett. ' +
-      'Проверь поле «Ссылка» и, если нужно, «Дополнительная ссылка».'
+      'Не найден адрес выбранного Jackett. Проверь ссылку в настройках Lampa.'
     );
   }
 
-  // Убираем дубликат, если обе ссылки ведут на один адрес с одним ключом.
   var unique = [];
   var seen = {};
 
   parsers.forEach(function (parser) {
     var id = parser.url + '|' + parser.key;
+
     if (!seen[id]) {
       seen[id] = true;
       unique.push(parser);
@@ -252,14 +306,16 @@ function getParserConfig() {
   return {
     type: type,
     selected: selected,
-    parsers: unique
+    parsers: unique,
+    settings: settings
   };
 }
 
 function buildJackettUrl(parser, query) {
-  var url = parser.url + '/api/v2.0/indexers/all/results';
-  var params = new URLSearchParams();
+  var url = parser.url.replace(/\/+$/, '') +
+    '/api/v2.0/indexers/all/results';
 
+  var params = new URLSearchParams();
   params.set('apikey', parser.key);
   params.set('Query', query);
   params.set('Category', '2000,5000');
@@ -276,6 +332,7 @@ function normalizeImdb(value) {
 
 function getImdbId(movie) {
   movie = movie || {};
+
   var ids = movie.ids || {};
   var external = movie.external_ids || {};
 
@@ -289,6 +346,7 @@ function getImdbId(movie) {
     var id = normalizeImdb(candidates[i]);
     if (id) return id;
   }
+
   return '';
 }
 
@@ -309,6 +367,7 @@ function hashOf(x) {
 
 function magnetOf(item) {
   var raw = item.raw || {};
+
   var candidates = [
     raw.MagnetUri, raw.magnetUri, raw.magnet, raw.Magnet,
     raw.link, raw.Link, raw.downloadUrl, raw.DownloadUrl
@@ -316,6 +375,7 @@ function magnetOf(item) {
 
   for (var i = 0; i < candidates.length; i++) {
     var value = String(candidates[i] || '').trim();
+
     if (/^magnet:\?/i.test(value) && /urn:btih:/i.test(value)) {
       return value;
     }
@@ -351,8 +411,12 @@ function magnetDiagnostic(item) {
 function firstValue(obj, names) {
   for (var i = 0; i < names.length; i++) {
     var value = obj && obj[names[i]];
-    if (value !== undefined && value !== null && value !== '') return value;
+
+    if (value !== undefined && value !== null && value !== '') {
+      return value;
+    }
   }
+
   return '';
 }
 
@@ -364,6 +428,7 @@ function parseDateValue(value) {
   }
 
   var text = String(value).trim();
+
   if (/^\d{10}$/.test(text)) return Number(text) * 1000;
   if (/^\d{13}$/.test(text)) return Number(text);
 
@@ -387,14 +452,19 @@ function search(parser, query, access) {
 
     var mapped = list.map(function (x) {
       var rawSize = firstValue(x, ['Size', 'size', 'length']);
-      var rawSeeders = firstValue(x, ['Seeders', 'seeders', 'Seeds', 'seeds']);
+
+      var rawSeeders = firstValue(
+        x, ['Seeders', 'seeders', 'Seeds', 'seeds']
+      );
+
       var rawLeechers = firstValue(
         x, ['Peers', 'peers', 'Leechers', 'leechers']
       );
+
       var rawDate = firstValue(x, [
-        'PublishDate', 'publishDate', 'publish_date', 'Date', 'date',
-        'Added', 'added', 'Created', 'created',
-        'CreationDate', 'creationDate'
+        'PublishDate', 'publishDate', 'publish_date',
+        'Date', 'date', 'Added', 'added',
+        'Created', 'created', 'CreationDate', 'creationDate'
       ]);
 
       var item = {
@@ -432,17 +502,20 @@ function sortItems(items, mode) {
 
   rows.sort(function (a, b) {
     if (mode === 'seeders') {
-      return (b.seeders - a.seeders) || (b.size - a.size) ||
+      return (b.seeders - a.seeders) ||
+        (b.size - a.size) ||
         a.title.localeCompare(b.title);
     }
 
     if (mode === 'size_desc') {
-      return (b.size - a.size) || (b.seeders - a.seeders) ||
+      return (b.size - a.size) ||
+        (b.seeders - a.seeders) ||
         a.title.localeCompare(b.title);
     }
 
     if (mode === 'size_asc') {
-      return (a.size - b.size) || (b.seeders - a.seeders) ||
+      return (a.size - b.size) ||
+        (b.seeders - a.seeders) ||
         a.title.localeCompare(b.title);
     }
 
@@ -450,6 +523,7 @@ function sortItems(items, mode) {
       if (a.dateAdded && b.dateAdded) return b.dateAdded - a.dateAdded;
       if (a.dateAdded) return -1;
       if (b.dateAdded) return 1;
+
       return (b.seeders - a.seeders) || a.title.localeCompare(b.title);
     }
 
@@ -473,6 +547,7 @@ function checkDMM(imdbId, hashes, access) {
   }
 
   var proxy;
+
   try {
     proxy = requireProxy();
   } catch (e) {
@@ -495,20 +570,24 @@ function checkDMM(imdbId, hashes, access) {
 
 function findHashResult(data, hash) {
   var wanted = String(hash || '').toLowerCase();
+
   if (!data || !Array.isArray(data.available)) return null;
 
   for (var i = 0; i < data.available.length; i++) {
     var item = data.available[i];
+
     if (item && String(item.hash || '').toLowerCase() === wanted) {
       return item;
     }
   }
+
   return null;
 }
 
 function classifyCache(result) {
   if (!result || typeof result !== 'object') return 'unknown';
   if (Array.isArray(result.files) && result.files.length > 0) return 'cached';
+
   return 'unknown';
 }
 
@@ -529,6 +608,7 @@ function formatSize(n) {
     n /= 1024;
     i++;
   }
+
   return n.toFixed(i > 1 ? 1 : 0) + ' ' + units[i];
 }
 
@@ -545,6 +625,7 @@ function statusText(status) {
     uploading: 'RD обрабатывает файлы',
     dead: 'Раздача недоступна'
   };
+
   return labels[status] || ('Статус RD: ' + (status || 'неизвестен'));
 }
 
@@ -559,6 +640,7 @@ function getRDUserId(screen, button) {
   }
 
   var proxy;
+
   try {
     proxy = requireProxy();
   } catch (e) {
@@ -582,6 +664,7 @@ function getRDUserId(screen, button) {
 
     var id = String(data.id);
     var old = screen.querySelector('#rd-user-id-result');
+
     if (old) old.remove();
 
     var result = document.createElement('div');
@@ -664,11 +747,13 @@ function runCacheCheck(items, imdbId, access, screen) {
   if (!imdbId) {
     status.textContent =
       'Кеш не проверен: IMDb ID не найден в данных фильма.';
+
     items.forEach(function (item) {
       item.cacheState = 'unknown';
       item.cacheFiles = 0;
       updateCacheLabel(screen, item);
     });
+
     renderCards(screen);
     return;
   }
@@ -679,6 +764,7 @@ function runCacheCheck(items, imdbId, access, screen) {
   }
 
   var batches = [];
+
   for (var i = 0; i < items.length; i += 100) {
     batches.push(items.slice(i, i + 100));
   }
@@ -718,6 +804,7 @@ function runCacheCheck(items, imdbId, access, screen) {
       });
     }).catch(function (err) {
       errors.push(err.message);
+
       batch.forEach(function (item) {
         item.cacheState = 'error';
         item.cacheFiles = 0;
@@ -733,6 +820,7 @@ function runCacheCheck(items, imdbId, access, screen) {
       (errors.length ? ' · ошибок: ' + errors.length : '');
 
     var diag = screen.querySelector('#rd-dmm-diagnostic');
+
     if (diag) {
       diag.textContent =
         'IMDb ID: ' + imdbId +
@@ -768,7 +856,8 @@ function testOne(item, button, resultNode) {
   var magnet = item.magnet || magnetOf(item);
 
   if (!magnet) {
-    resultNode.textContent = 'Не удалось получить magnet-ссылку или hash.';
+    resultNode.textContent =
+      'Не удалось получить magnet-ссылку или hash.';
     return;
   }
 
@@ -790,9 +879,11 @@ function testOne(item, button, resultNode) {
     }
 
     var id = String(response.id);
+
     button.dataset.rdTaskCreated = id;
     button.textContent = 'Задача создана';
-    resultNode.textContent = 'Задача создана: ' + id + '\nВыбираем все файлы…';
+    resultNode.textContent =
+      'Задача создана: ' + id + '\nВыбираем все файлы…';
 
     return postForm(
       RD + 'torrents/selectFiles/' + encodeURIComponent(id),
@@ -801,7 +892,9 @@ function testOne(item, button, resultNode) {
     ).then(function () {
       return req(RD + 'torrents/info/' + encodeURIComponent(id), access);
     }).then(function (info) {
-      resultNode.textContent = statusText(info.status) + '\nID задачи RD: ' + id;
+      resultNode.textContent =
+        statusText(info.status) + '\nID задачи RD: ' + id;
+
       button.textContent = 'Задача создана';
       button.disabled = true;
     }).catch(function (err) {
@@ -809,6 +902,7 @@ function testOne(item, button, resultNode) {
         'Задача RD создана: ' + id +
         '\nОшибка выбора файлов или проверки: ' + err.message +
         '\nПроверь задачу в RD вручную, прежде чем повторять добавление.';
+
       button.textContent = 'Задача создана';
       button.disabled = true;
     });
@@ -816,6 +910,7 @@ function testOne(item, button, resultNode) {
     button.dataset.rdBusy = '0';
     button.disabled = true;
     button.textContent = 'Проверь задачу RD';
+
     resultNode.textContent =
       'Не удалось подтвердить результат добавления: ' + err.message +
       '\nВозможно, RD успел создать задачу.' +
@@ -827,6 +922,7 @@ function testOne(item, button, resultNode) {
 
 function openSortMenu(screen) {
   var old = screen.querySelector('#rd-sort-menu');
+
   if (old) {
     old.remove();
     return;
@@ -879,6 +975,7 @@ function openSortMenu(screen) {
   });
 
   menu.appendChild(panel);
+
   menu.addEventListener('click', function (event) {
     if (event.target === menu) menu.remove();
   });
@@ -891,6 +988,7 @@ function openSortMenu(screen) {
 function renderCards(screen) {
   var all = screen.__rdItems || [];
   var box = screen.querySelector('#rd-results');
+
   if (!box) return;
 
   var mode = getSortMode();
@@ -901,7 +999,10 @@ function renderCards(screen) {
   })[0];
 
   var sortInfo = screen.querySelector('#rd-sort-current');
-  if (sortInfo && selected) sortInfo.textContent = selected.label;
+
+  if (sortInfo && selected) {
+    sortInfo.textContent = selected.label;
+  }
 
   sorted.forEach(function (item) {
     var card = item._rdCard;
@@ -909,6 +1010,7 @@ function renderCards(screen) {
     if (!card) {
       card = document.createElement('div');
       item._rdCard = card;
+
       card.style.cssText =
         'padding:14px;margin:10px 0;background:#303030;' +
         'border-radius:8px;line-height:1.5;overflow-wrap:anywhere';
@@ -922,9 +1024,11 @@ function renderCards(screen) {
       meta.style.cssText = 'opacity:.75;font-size:.9em';
 
       var bits = [];
+
       if (item.size) bits.push(formatSize(item.size));
       bits.push('Сиды: ' + item.seeders);
       if (item.tracker) bits.push(item.tracker);
+
       if (item.dateAdded) {
         bits.push('Дата: ' + new Date(item.dateAdded).toLocaleDateString());
       }
@@ -952,6 +1056,7 @@ function renderCards(screen) {
         'font:12px monospace;line-height:1.5';
 
       var diag = magnetDiagnostic(item);
+
       diagPre.textContent =
         'Название карточки Lampa:\n' + diag.title +
         '\n\nИмя dn в magnet:\n' + diag.dn +
@@ -989,9 +1094,11 @@ function renderCards(screen) {
     }
 
     var sourceLabel = card.querySelector('[data-source-label]');
+
     if (sourceLabel) {
       sourceLabel.textContent =
-        'Источник: ' + (item.sources || [item.source || 'неизвестен']).join(' + ');
+        'Источник: ' +
+        (item.sources || [item.source || 'неизвестен']).join(' + ');
     }
 
     updateCacheLabel(screen, item);
@@ -1017,6 +1124,7 @@ function openSearch(query, movie) {
   }
 
   var config;
+
   try {
     config = getParserConfig();
   } catch (e) {
@@ -1026,6 +1134,7 @@ function openSearch(query, movie) {
 
   var imdbId = getImdbId(movie);
   var old = document.getElementById('rd-card-search');
+
   if (old) old.remove();
 
   var screen = document.createElement('div');
@@ -1078,6 +1187,10 @@ function openSearch(query, movie) {
   var parserStats = {};
   var parserErrors = [];
 
+  var settingsDiagnostic = getParserSettingsDiagnostic();
+
+  console.log('[RD Card Button] Настройки парсера:', settingsDiagnostic);
+
   screen.querySelector('#rd-status').textContent =
     'Ищем: ' + query + ' · источников: ' + config.parsers.length;
 
@@ -1089,6 +1202,7 @@ function openSearch(query, movie) {
         rows: rows,
         error: ''
       };
+
       return rows;
     }).catch(function (err) {
       parserStats[parser.name] = {
@@ -1099,6 +1213,7 @@ function openSearch(query, movie) {
       };
 
       parserErrors.push(parser.name + ': ' + err.message);
+
       return [];
     });
   })).then(function (groups) {
@@ -1161,11 +1276,19 @@ function openSearch(query, movie) {
       'IMDb ID: ' + (imdbId || 'не найден в объекте фильма'),
       'Тип парсера Lampa: ' + config.type,
       'Выбор ссылки Lampa: ' + config.selected,
+      'parser_use: ' + String(settingsDiagnostic.parser_use),
+      'parser_torrent_type: ' + String(settingsDiagnostic.parser_torrent_type),
+      'parser_use_link: ' + String(settingsDiagnostic.parser_use_link),
+      'Основной URL: ' + (settingsDiagnostic.jackett_url || '(не задан)'),
+      'Дополнительный URL: ' + (settingsDiagnostic.jackett_url_two || '(не задан)'),
+      'Основной API-ключ задан: ' + (settingsDiagnostic.primaryKeyConfigured ? 'да' : 'нет'),
+      'Дополнительный API-ключ задан: ' + (settingsDiagnostic.secondaryKeyConfigured ? 'да' : 'нет'),
       'Источников запрошено: ' + config.parsers.length
     ];
 
     config.parsers.forEach(function (parser) {
       var info = parserStats[parser.name] || {};
+
       report.push(
         '\n' + parser.name + ' (' + parser.url + '):' +
         '\n  Ответов API: ' + (info.rawCount || 0) +
@@ -1186,9 +1309,14 @@ function openSearch(query, movie) {
 
     if (!all.length) {
       var empty = document.createElement('p');
+
       empty.textContent =
-        'Раздачи не найдены. Проверь URL, API-ключ и настройки парсера Lampa.';
+        'Раздачи не найдены. Проверь URL, API-ключ и настройки парсера. ' +
+        'Если появилась ошибка HTTP 403 Target not allowed, выбранный домен ' +
+        'не разрешён в Worker.';
+
       box.appendChild(empty);
+
       screen.querySelector('#rd-status').textContent = 'Раздачи не найдены.';
       return;
     }
@@ -1222,6 +1350,7 @@ function addButton(e) {
 
   var movie = e.data.movie;
   var title = movie.title || movie.name || movie.original_title || '';
+
   if (!title) return;
 
   var button = window.jQuery(
@@ -1245,6 +1374,7 @@ function addButton(e) {
     torrent.after(button);
   } else {
     var play = root.find('.full-start__play');
+
     if (play.length) play.after(button);
     else root.find('.full-start__buttons').append(button);
   }
