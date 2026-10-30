@@ -1,4 +1,4 @@
-function () {
+(function () {
     'use strict';
 
     var PLUGIN_NAME = 'Real-Debrid Bridge';
@@ -1575,3 +1575,5 @@ function () {
         document.addEventListener('DOMContentLoaded', init);
     } else {
         init();
+    }
+})();
