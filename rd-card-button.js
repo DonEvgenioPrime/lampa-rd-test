@@ -1062,10 +1062,9 @@ function openSearch(query, movie) {
   var screen = document.createElement('div');
   screen.id = 'rd-card-search';
   screen.style.cssText =
-    'position:fixed;z-index:999999;top:0;left:0;right:0;' +
-    'bottom:135px;overflow:auto;' +
-    'background:#171717;color:#fff;padding:20px;box-sizing:border-box;' +
-    'font:16px Arial,sans-serif';
+    'position:fixed;z-index:1000;inset:0;overflow:auto;' +
+    'background:#171717;color:#fff;padding:20px;padding-bottom:100px;' +
+    'box-sizing:border-box;font:16px Arial,sans-serif';
 
   screen.innerHTML =
     '<div style="max-width:950px;margin:auto">' +
