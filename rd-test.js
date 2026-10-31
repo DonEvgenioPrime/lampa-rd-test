@@ -2,7 +2,7 @@
     'use strict';
 
     var PLUGIN_NAME = 'Real-Debrid Bridge';
-    var PLUGIN_VERSION = '1.3.1';
+    var PLUGIN_VERSION = '1.3.2';
     var COMPONENT = 'rd_bridge';
     var PROXY_STORE = 'rd_bridge_worker_url_v1';
     var RD_API = 'https://api.real-debrid.com/rest/1.0/';
@@ -1422,6 +1422,15 @@
                 'Пустое поле удаляет адрес.',
                 function () {
                     askProxyUrl();
+                }
+            );
+
+            addButton(
+                'rd_parser_manager_v1',
+                'Выбор и настройка парсеров',
+                'Открыть поле добавления парсера, проверку адреса и управление сохранёнными парсерами.',
+                function () {
+                    openPanel();
                 }
             );
 
