@@ -141,36 +141,10 @@ function postForm(url, access, values) {
   });
 }
 
-/* ---------- Настройки парсера из Lampa ---------- */
+/* ---------- Общие настройки парсера с rd-test ---------- */
 
-function lampaSetting(key, fallback) {
-  try {
-    if (
-      window.Lampa &&
-      Lampa.Storage &&
-      typeof Lampa.Storage.get === 'function'
-    ) {
-      var value = Lampa.Storage.get(key, fallback);
+var PARSERS_STORE = 'rd_bridge_parsers_v1';
 
-      return value === undefined || value === null ? fallback : value;
-    }
-  } catch (e) {}
-
-  return fallback;
-}
-
-function settingEnabled(value) {
-  return value === true ||
-    value === 'true' ||
-    value === 1 ||
-    value === '1';
-}
-
-/*
- * ИСПРАВЛЕНО:
- * URL без протокола всегда получает HTTPS.
- * Это необходимо, потому что Worker требует HTTPS.
- */
 function normalizeParserUrl(value) {
   var url = String(value || '').trim();
   if (!url) return '';
@@ -182,143 +156,71 @@ function normalizeParserUrl(value) {
   try {
     var parsed = new URL(url);
 
-    if (parsed.protocol !== 'https:') {
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
       return '';
     }
 
-    // Сохраняем путь установки Jackett, если он есть.
+    if (!parsed.hostname || parsed.username || parsed.password ||
+        parsed.search || parsed.hash) {
+      return '';
+    }
+
     return parsed.href.replace(/\/+$/, '');
   } catch (e) {
     return '';
   }
 }
 
-/*
- * Нормализация вариантов значения parser_use_link.
- * Адреса парсеров в плагине не прописываются.
- */
-function normalizeLinkSelection(value) {
-  value = String(value == null ? 'one' : value)
-    .trim()
-    .toLowerCase();
-
-  if (['two', '2', 'secondary', 'second'].indexOf(value) !== -1) {
-    return 'two';
-  }
-
-  if (
-    ['both', 'all', '1,2', 'one_two'].indexOf(value) !== -1
-  ) {
-    return 'both';
-  }
-
-  return 'one';
-}
-
 function getParserSettingsDiagnostic() {
+  var parsers = [];
+
+  try {
+    var saved = localStorage.getItem(PARSERS_STORE);
+    var parsed = saved ? JSON.parse(saved) : [];
+
+    if (Array.isArray(parsed)) {
+      parsers = parsed.filter(function (parser) {
+        return parser && parser.url && parser.enabled !== false;
+      }).map(function (parser) {
+        return {
+          name: String(parser.name || 'Парсер').trim(),
+          url: normalizeParserUrl(parser.url),
+          key: String(parser.key || '').trim(),
+          enabled: parser.enabled !== false
+        };
+      }).filter(function (parser) {
+        return !!parser.url;
+      });
+    }
+  } catch (e) {
+    parsers = [];
+  }
+
   return {
-    parser_use: lampaSetting('parser_use', null),
-    parser_torrent_type: lampaSetting('parser_torrent_type', null),
-    parser_use_link: lampaSetting('parser_use_link', null),
-    jackett_url: lampaSetting('jackett_url', ''),
-    jackett_url_two: lampaSetting('jackett_url_two', ''),
-    primaryKeyConfigured: !!lampaSetting('jackett_key', ''),
-    secondaryKeyConfigured: !!lampaSetting('jackett_key_two', '')
+    parsers: parsers,
+    parserCount: parsers.length
   };
 }
 
 function getParserConfig() {
   var settings = getParserSettingsDiagnostic();
 
-  var enabled = settingEnabled(settings.parser_use);
-  var type = String(
-    settings.parser_torrent_type || 'jackett'
-  ).trim().toLowerCase();
-
-  var primaryUrl = normalizeParserUrl(settings.jackett_url);
-  var primaryKey = String(
-    lampaSetting('jackett_key', '') || ''
-  ).trim();
-
-  var secondaryUrl = normalizeParserUrl(settings.jackett_url_two);
-  var secondaryKey = String(
-    lampaSetting('jackett_key_two', '') || ''
-  ).trim();
-
-  /*
-   * ИСПРАВЛЕНО:
-   * Если Lampa вернула пустой parser_use_link,
-   * используем основную ссылку.
-   */
-  var selected = normalizeLinkSelection(
-    settings.parser_use_link || 'one'
-  );
-
-  if (!enabled) {
+  if (!settings.parsers.length) {
     throw new Error(
-      'Парсер отключён в Lampa. Включи «Использовать парсер» в настройках.'
+      'Парсер не настроен. Открой настройки Real-Debrid → ' +
+      '«Выбор парсера и API» в rd-test и сохрани рабочий адрес.'
     );
   }
 
-  if (type !== 'jackett') {
-    throw new Error(
-      'Выбран тип парсера «' + type +
-      '». Эта версия плагина использует API Jackett. ' +
-      'Выбери Jackett в настройках Lampa.'
-    );
-  }
-
-  var primary = primaryUrl ? {
-    name: 'Основной',
-    url: primaryUrl,
-    key: primaryKey
-  } : null;
-
-  var secondary = secondaryUrl ? {
-    name: 'Дополнительный',
-    url: secondaryUrl,
-    key: secondaryKey
-  } : null;
-
-  var parsers = [];
-
-  if (selected === 'two') {
-    if (secondary) {
-      parsers.push(secondary);
-    } else {
-      throw new Error(
-        'Выбрана дополнительная ссылка, но она не задана в настройках Lampa.'
-      );
-    }
-  } else if (selected === 'both') {
-    if (primary) parsers.push(primary);
-    if (secondary) parsers.push(secondary);
-  } else {
-    if (primary) parsers.push(primary);
-  }
-
-  if (!parsers.length) {
-    throw new Error(
-      'Не найден адрес выбранного Jackett. Проверь ссылку в настройках Lampa.'
-    );
-  }
-
-  var unique = [];
-  var seen = {};
-
-  parsers.forEach(function (parser) {
-    var id = parser.url + '|' + parser.key;
-
-    if (!seen[id]) {
-      seen[id] = true;
-      unique.push(parser);
-    }
-  });
+  // rd-test сохраняет выбранный парсер как единственную активную запись.
+  // Если в хранилище остались несколько записей, используем только первую
+  // включённую — Card Button больше не объединяет основной и дополнительный.
+  var parser = settings.parsers[0];
 
   return {
-    type: type,
-    selected: selected,
-    parsers: unique,
+    type: 'jackett',
+    selected: 'saved',
+    parsers: [parser],
     settings: settings
   };
 }
@@ -1109,8 +1011,7 @@ function renderCards(screen) {
 
     if (sourceLabel) {
       sourceLabel.textContent =
-        'Источник: ' +
-        (item.sources || [item.source || 'неизвестен']).join(' + ');
+        'Источник: ' + (item.source || 'выбранный парсер');
     }
 
     updateCacheLabel(screen, item);
@@ -1171,7 +1072,7 @@ function openSearch(query, movie) {
       '</div>' +
       '<p id="rd-status">Ищем: ' + esc(query) + '</p>' +
       '<div style="padding:12px;background:#333;border-radius:8px;line-height:1.5;margin-bottom:14px">' +
-        'Источники берутся из настроек парсера Lampa. Зелёная метка означает, что DMM вернул хэш в available с непустым files. Отсутствие подтверждения не доказывает отсутствие кеша в Real-Debrid.' +
+        'Используется тот же сохранённый парсер и API-ключ, что и в rd-test. Зелёная метка означает, что DMM вернул хэш в available с непустым files. Отсутствие подтверждения не доказывает отсутствие кеша в Real-Debrid.' +
       '</div>' +
       '<div id="rd-results"></div>' +
       '<details style="margin-top:16px;padding:12px;background:#292929;border-radius:8px">' +
@@ -1182,9 +1083,54 @@ function openSearch(query, movie) {
 
   document.body.appendChild(screen);
 
-  screen.querySelector('#rd-close').onclick = function () {
-    screen.remove();
-  };
+  function closeSearch() {
+    var sortMenu = screen.querySelector('#rd-sort-menu');
+
+    if (sortMenu) {
+      sortMenu.remove();
+      return;
+    }
+
+    if (screen.isConnected) screen.remove();
+    document.removeEventListener('keydown', onSearchBack, true);
+
+    if (window.Lampa && Lampa.Listener &&
+        typeof Lampa.Listener.remove === 'function' &&
+        screen.__rdBackListener) {
+      Lampa.Listener.remove('back', screen.__rdBackListener);
+    }
+  }
+
+  function onSearchBack(event) {
+    var key = event.key || '';
+    var code = event.keyCode || event.which;
+
+    if (
+      key === 'Escape' || key === 'Backspace' ||
+      key === 'BrowserBack' || key === 'GoBack' ||
+      code === 27 || code === 8 || code === 461
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+      closeSearch();
+    }
+  }
+
+  screen.querySelector('#rd-close').onclick = closeSearch;
+  document.addEventListener('keydown', onSearchBack, true);
+
+  // Some Lampa builds emit a dedicated back event for remote controls.
+  if (window.Lampa && Lampa.Listener &&
+      typeof Lampa.Listener.follow === 'function') {
+    screen.__rdBackListener = function (event) {
+      if (!screen.isConnected) return;
+      if (event && (event.type === 'back' || event.type === 'back:enter')) {
+        closeSearch();
+      }
+    };
+    Lampa.Listener.follow('back', screen.__rdBackListener);
+  }
 
   screen.querySelector('#rd-get-id').onclick = function () {
     getRDUserId(screen, this);
@@ -1285,15 +1231,10 @@ function openSearch(query, movie) {
     var report = [
       'Запрос: ' + query,
       'IMDb ID: ' + (imdbId || 'не найден в объекте фильма'),
-      'Тип парсера Lampa: ' + config.type,
-      'Выбор ссылки Lampa: ' + config.selected,
-      'parser_use: ' + String(settingsDiagnostic.parser_use),
-      'parser_torrent_type: ' + String(settingsDiagnostic.parser_torrent_type),
-      'parser_use_link: ' + String(settingsDiagnostic.parser_use_link),
-      'Основной URL: ' + (settingsDiagnostic.jackett_url || '(не задан)'),
-      'Дополнительный URL: ' + (settingsDiagnostic.jackett_url_two || '(не задан)'),
-      'Основной API-ключ задан: ' + (settingsDiagnostic.primaryKeyConfigured ? 'да' : 'нет'),
-      'Дополнительный API-ключ задан: ' + (settingsDiagnostic.secondaryKeyConfigured ? 'да' : 'нет'),
+      'Источник настроек: rd-test (общая память плагинов)',
+      'Активный парсер: ' + config.parsers[0].name,
+      'URL парсера: ' + config.parsers[0].url,
+      'API-ключ задан: ' + (config.parsers[0].key ? 'да' : 'нет'),
       'Источников запрошено: ' + config.parsers.length
     ];
 
