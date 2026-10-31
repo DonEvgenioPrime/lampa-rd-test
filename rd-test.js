@@ -2,7 +2,7 @@
     'use strict';
 
     var PLUGIN_NAME = 'Real-Debrid Bridge';
-    var PLUGIN_VERSION = '1.3.6';
+    var PLUGIN_VERSION = '1.3.7';
     var COMPONENT = 'rd_bridge';
     var PROXY_STORE = 'rd_bridge_worker_url_v1';
     var RD_API = 'https://api.real-debrid.com/rest/1.0/';
@@ -339,13 +339,9 @@
     /* ---------------- SIMPLE PARSER SETUP ---------------- */
 
     function askSingleParserUrl() {
-        var current = getParsers().filter(function (parser) {
-            return parser.enabled !== false;
-        })[0];
-
         var value = window.prompt(
             'URL парсера:',
-            current ? current.url : ''
+            ''
         );
 
         if (value === null) return;
@@ -363,13 +359,9 @@
             return;
         }
 
-        var previous = getParsers().filter(function (item) {
-            return item.url === parser.url;
-        })[0];
-
         var apiKey = window.prompt(
             'API-ключ парсера (если не требуется — оставь пустым):',
-            previous ? previous.key : ''
+            ''
         );
 
         if (apiKey === null) return;
@@ -410,7 +402,7 @@
             saveParsers([parser]);
             notify(
                 'Парсер сохранён и включён. ' +
-                'Тестовый запрос успешен. Результатов: ' + list.length
+                'Тестовый запрос успешен. API отвечает корректно.'
             );
         }).catch(function (error) {
             notify('Парсер не сохранён: ' + error.message);
