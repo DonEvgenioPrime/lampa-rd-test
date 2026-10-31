@@ -202,6 +202,15 @@ function getParserSettingsDiagnostic() {
   };
 }
 
+function getParserDisplayName(parser) {
+  try {
+    var host = new URL(parser.url).hostname.toLowerCase();
+    return host.replace(/^www\./, '');
+  } catch (e) {
+    return parser.name || 'выбранный парсер';
+  }
+}
+
 function getParserConfig() {
   var settings = getParserSettingsDiagnostic();
 
@@ -1011,7 +1020,7 @@ function renderCards(screen) {
 
     if (sourceLabel) {
       sourceLabel.textContent =
-        'Источник: ' + (item.source || 'выбранный парсер');
+        'Источник: ' + getParserDisplayName(getParserConfig().parsers[0]);
     }
 
     updateCacheLabel(screen, item);
@@ -1083,7 +1092,43 @@ function openSearch(query, movie) {
 
   document.body.appendChild(screen);
 
+  var historyEntryActive = false;
+  var closingFromHistory = false;
+
+  function removeSearchOverlay() {
+    if (screen.isConnected) screen.remove();
+    window.removeEventListener('popstate', onBrowserBack, false);
+  }
+
+  function onBrowserBack() {
+    if (!screen.isConnected) {
+      window.removeEventListener('popstate', onBrowserBack, false);
+      return;
+    }
+
+    var sortMenu = screen.querySelector('#rd-sort-menu');
+
+    if (sortMenu) {
+      // The browser Back button closes the sort layer first.
+      sortMenu.remove();
+
+      // Restore the search entry so the next Back closes Card Button.
+      history.pushState(
+        { rdCardButtonSearch: true, rdCardButtonId: screen.__rdHistoryId },
+        '',
+        window.location.href
+      );
+      return;
+    }
+
+    closingFromHistory = true;
+    historyEntryActive = false;
+    removeSearchOverlay();
+  }
+
   function closeSearch() {
+    if (!screen.isConnected) return;
+
     var sortMenu = screen.querySelector('#rd-sort-menu');
 
     if (sortMenu) {
@@ -1091,45 +1136,28 @@ function openSearch(query, movie) {
       return;
     }
 
-    if (screen.isConnected) screen.remove();
-    document.removeEventListener('keydown', onSearchBack, true);
+    removeSearchOverlay();
 
-    if (window.Lampa && Lampa.Listener &&
-        typeof Lampa.Listener.remove === 'function' &&
-        screen.__rdBackListener) {
-      Lampa.Listener.remove('back', screen.__rdBackListener);
-    }
-  }
-
-  function onSearchBack(event) {
-    var key = event.key || '';
-    var code = event.keyCode || event.which;
-
-    if (
-      key === 'Escape' || key === 'Backspace' ||
-      key === 'BrowserBack' || key === 'GoBack' ||
-      code === 27 || code === 8 || code === 461
-    ) {
-      event.preventDefault();
-      event.stopPropagation();
-      if (event.stopImmediatePropagation) event.stopImmediatePropagation();
-      closeSearch();
+    // Remove our own history entry without navigating away from the movie card.
+    if (historyEntryActive && !closingFromHistory) {
+      historyEntryActive = false;
+      history.back();
     }
   }
 
   screen.querySelector('#rd-close').onclick = closeSearch;
-  document.addEventListener('keydown', onSearchBack, true);
 
-  // Some Lampa builds emit a dedicated back event for remote controls.
-  if (window.Lampa && Lampa.Listener &&
-      typeof Lampa.Listener.follow === 'function') {
-    screen.__rdBackListener = function (event) {
-      if (!screen.isConnected) return;
-      if (event && (event.type === 'back' || event.type === 'back:enter')) {
-        closeSearch();
-      }
-    };
-    Lampa.Listener.follow('back', screen.__rdBackListener);
+  screen.__rdHistoryId = Date.now() + '-' + Math.floor(Math.random() * 100000);
+  try {
+    history.pushState(
+      { rdCardButtonSearch: true, rdCardButtonId: screen.__rdHistoryId },
+      '',
+      window.location.href
+    );
+    historyEntryActive = true;
+    window.addEventListener('popstate', onBrowserBack, false);
+  } catch (historyError) {
+    console.warn('[RD Card Button] Не удалось добавить запись истории:', historyError);
   }
 
   screen.querySelector('#rd-get-id').onclick = function () {
