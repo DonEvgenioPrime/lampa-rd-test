@@ -2,7 +2,7 @@
     'use strict';
 
     var PLUGIN_NAME = 'Real-Debrid Bridge';
-    var PLUGIN_VERSION = '1.3.0';
+    var PLUGIN_VERSION = '1.3.1';
     var COMPONENT = 'rd_bridge';
     var PROXY_STORE = 'rd_bridge_worker_url_v1';
     var RD_API = 'https://api.real-debrid.com/rest/1.0/';
@@ -118,221 +118,206 @@
         return url.href;
     }
 
-    function parserManager() {
-        function menu() {
-            var parsers = getParsers();
-
-            var text = 'УПРАВЛЕНИЕ ПАРСЕРАМИ\n\n';
-
-            if (!parsers.length) {
-                text += 'Список пуст.\n\n';
-            } else {
-                parsers.forEach(function (parser, index) {
-                    text += (index + 1) + '. ' + parser.name +
-                        ' — ' + (parser.enabled ? 'ВКЛ' : 'ВЫКЛ') +
-                        '\n' + parser.url + '\n\n';
-                });
-            }
-
-            text +=
-                'Введите номер парсера для редактирования.\n' +
-                '0 — добавить парсер\n' +
-                '-1 — выйти';
-
-            var choice = window.prompt(text, '-1');
-
-            if (choice === null || choice.trim() === '-1') return;
-
-            if (choice.trim() === '0') {
-                addParser();
-                return;
-            }
-
-            var index = Number(choice) - 1;
-
-            if (
-                !isFinite(index) ||
-                index < 0 ||
-                index >= parsers.length
-            ) {
-                notify('Неверный номер.');
-                return;
-            }
-
-            editParser(index);
+    function testParser(parser, onResult) {
+        if (!checkProxyConfigured()) {
+            if (onResult) onResult('Сначала настрой Cloudflare Worker.');
+            return;
         }
 
-        function addParser() {
-            var name = window.prompt('Название парсера:');
+        var params = new URLSearchParams();
+        params.set('Query', 'test');
+        params.set('Category', '2000,5000');
 
-            if (name === null) return;
+        if (parser.key) params.set('apikey', parser.key);
 
-            name = name.trim();
-
-            if (!name) {
-                notify('Название не может быть пустым.');
-                return;
-            }
-
-            var url = window.prompt('Адрес парсера:', 'https://');
-
-            if (url === null) return;
-
-            try {
-                url = normalizeParserUrl(url);
-            } catch (e) {
-                notify(e.message);
-                return;
-            }
-
-            var key = window.prompt(
-                'API-ключ (если не требуется — оставь пустым):',
-                ''
-            );
-
-            if (key === null) return;
-
-            var parsers = getParsers();
-
-            parsers.push({
-                name: name,
-                url: url,
-                key: key.trim(),
-                enabled: true
-            });
-
-            saveParsers(parsers);
-            notify('Парсер «' + name + '» добавлен.');
+        var url;
+        try {
+            url = parserEndpoint(parser, params);
+        } catch (e) {
+            if (onResult) onResult(e.message);
+            return;
         }
 
-        function editParser(index) {
+        if (onResult) onResult('Проверяю подключение…');
+
+        request(proxyUrl(url)).then(function (data) {
+            var list = Array.isArray(data)
+                ? data
+                : (data && (data.Results || data.results));
+
+            if (!Array.isArray(list)) {
+                throw new Error('Парсер ответил, но формат данных не похож на Torznab API.');
+            }
+
+            if (onResult) {
+                onResult('Подключение успешно. Тестовых результатов: ' + list.length);
+            }
+        }).catch(function (error) {
+            if (onResult) onResult('Ошибка: ' + error.message);
+        });
+    }
+
+    function renderParserManager(panel) {
+        var host = panel.querySelector('#rd-parser-manager');
+        if (!host) return;
+
+        function element(tag, className, value) {
+            var node = document.createElement(tag);
+            if (className) node.className = className;
+            if (value !== undefined) node.textContent = value;
+            return node;
+        }
+
+        function field(value, placeholder, type) {
+            var input = element('input', 'rd-bridge-input');
+            input.type = type || 'text';
+            input.value = value || '';
+            input.placeholder = placeholder;
+            return input;
+        }
+
+        function message(node, text, isError) {
+            node.textContent = text || '';
+            node.style.color = isError ? '#ff7777' : '#8bdc9b';
+        }
+
+        function render() {
+            host.innerHTML = '';
+            var heading = element('div', 'rd-bridge-title', 'Парсеры');
+            host.appendChild(heading);
+            host.appendChild(element('div', 'rd-bridge-meta',
+                'Добавь адрес парсера или измени существующий. Ошибки проверки будут показаны прямо под полем.'));
+
             var parsers = getParsers();
-            var parser = parsers[index];
+            parsers.forEach(function (parser, index) {
+                var card = element('div', 'rd-bridge-row');
+                var name = field(parser.name, 'Название парсера');
+                var url = field(parser.url, 'https://адрес-парсера');
+                var key = field(parser.key, 'API-ключ (если нужен)');
+                var status = element('div', 'rd-bridge-status', '');
+                var save = element('button', 'rd-bridge-button', 'Сохранить');
+                var test = element('button', 'rd-bridge-button', 'Проверить');
+                var toggle = element('button', 'rd-bridge-button', parser.enabled ? 'Отключить' : 'Включить');
+                var remove = element('button', 'rd-bridge-button', 'Удалить');
 
-            if (!parser) return;
+                card.appendChild(element('div', 'rd-bridge-title', parser.enabled ? parser.name + ' · включён' : parser.name + ' · выключен'));
+                card.appendChild(name);
+                card.appendChild(url);
+                card.appendChild(key);
+                card.appendChild(save);
+                card.appendChild(test);
+                card.appendChild(toggle);
+                card.appendChild(remove);
+                card.appendChild(status);
 
-            var action = window.prompt(
-                'Парсер: ' + parser.name + '\n\n' +
-                '1 — изменить название\n' +
-                '2 — изменить URL\n' +
-                '3 — изменить API-ключ\n' +
-                '4 — включить / отключить\n' +
-                '5 — проверить подключение\n' +
-                '6 — удалить\n' +
-                '0 — назад',
-                '0'
-            );
+                save.onclick = function () {
+                    try {
+                        var cleanName = name.value.trim();
+                        if (!cleanName) throw new Error('Укажи название парсера.');
+                        parser.name = cleanName;
+                        parser.url = normalizeParserUrl(url.value);
+                        parser.key = key.value.trim();
+                        parsers[index] = parser;
+                        saveParsers(parsers);
+                        message(status, 'Настройки парсера сохранены.', false);
+                        card.querySelector('.rd-bridge-title').textContent = parser.name + (parser.enabled ? ' · включён' : ' · выключен');
+                    } catch (e) {
+                        message(status, e.message, true);
+                    }
+                };
 
-            if (action === null || action === '0') return;
+                test.onclick = function () {
+                    var candidate;
+                    try {
+                        candidate = {
+                            name: name.value.trim() || 'Новый парсер',
+                            url: normalizeParserUrl(url.value),
+                            key: key.value.trim()
+                        };
+                    } catch (e) {
+                        message(status, e.message, true);
+                        return;
+                    }
+                    testParser(candidate, function (text) {
+                        message(status, text, /^Ошибка:|^Сначала|^Укажи|^Некоррект/.test(text));
+                    });
+                };
 
-            if (action === '1') {
-                var name = window.prompt(
-                    'Новое название:',
-                    parser.name
-                );
-
-                if (name === null) return;
-
-                if (!name.trim()) {
-                    notify('Название не может быть пустым.');
-                    return;
-                }
-
-                parser.name = name.trim();
-                saveParsers(parsers);
-                notify('Название изменено.');
-            } else if (action === '2') {
-                var url = window.prompt(
-                    'Новый URL:',
-                    parser.url
-                );
-
-                if (url === null) return;
-
-                try {
-                    parser.url = normalizeParserUrl(url);
+                toggle.onclick = function () {
+                    parser.enabled = !parser.enabled;
                     saveParsers(parsers);
-                    notify('URL изменён.');
-                } catch (e) {
-                    notify(e.message);
-                }
-            } else if (action === '3') {
-                var key = window.prompt(
-                    'Новый API-ключ:',
-                    parser.key
-                );
+                    render();
+                };
 
-                if (key === null) return;
-
-                parser.key = key.trim();
-                saveParsers(parsers);
-                notify('API-ключ сохранён.');
-            } else if (action === '4') {
-                parser.enabled = !parser.enabled;
-                saveParsers(parsers);
-
-                notify(
-                    parser.name + ': ' +
-                    (parser.enabled ? 'включён' : 'отключён')
-                );
-            } else if (action === '5') {
-                testParser(parser);
-            } else if (action === '6') {
-                if (window.confirm(
-                    'Удалить парсер «' + parser.name + '»?'
-                )) {
+                remove.onclick = function () {
+                    if (!window.confirm('Удалить парсер «' + parser.name + '»?')) return;
                     parsers.splice(index, 1);
                     saveParsers(parsers);
-                    notify('Парсер удалён.');
-                }
-            }
-        }
+                    render();
+                };
 
-        function testParser(parser) {
-            if (!checkProxyConfigured()) return;
-
-            notify('Проверяю парсер «' + parser.name + '»…');
-
-            var params = new URLSearchParams();
-            params.set('Query', 'test');
-            params.set('Category', '2000,5000');
-
-            if (parser.key) {
-                params.set('apikey', parser.key);
-            }
-
-            var url;
-
-            try {
-                url = parserEndpoint(parser, params);
-            } catch (e) {
-                notify(e.message);
-                return;
-            }
-
-            request(proxyUrl(url)).then(function (data) {
-                var list = Array.isArray(data)
-                    ? data
-                    : (data.Results || data.results);
-
-                if (!Array.isArray(list)) {
-                    throw new Error('Неожиданный формат ответа API.');
-                }
-
-                notify(
-                    'Парсер «' + parser.name +
-                    '» отвечает.\nРезультатов тестового запроса: ' +
-                    list.length
-                );
-            }).catch(function (error) {
-                notify(
-                    'Ошибка парсера «' + parser.name + '»:\n' +
-                    error.message
-                );
+                host.appendChild(card);
             });
+
+            var addCard = element('div', 'rd-bridge-row');
+            addCard.appendChild(element('div', 'rd-bridge-title', 'Добавить парсер'));
+            var addUrl = field('', 'Вставь URL парсера, например https://jac.red');
+            var addKey = field('', 'API-ключ (если требуется)');
+            var addName = field('', 'Название (необязательно)');
+            var addStatus = element('div', 'rd-bridge-status', '');
+            var addButton = element('button', 'rd-bridge-button', 'Добавить и сохранить');
+            var addTest = element('button', 'rd-bridge-button', 'Проверить адрес');
+            addCard.appendChild(addUrl);
+            addCard.appendChild(addName);
+            addCard.appendChild(addKey);
+            addCard.appendChild(addButton);
+            addCard.appendChild(addTest);
+            addCard.appendChild(addStatus);
+
+            function buildNewParser() {
+                var cleanUrl = normalizeParserUrl(addUrl.value);
+                var parsed = new URL(cleanUrl);
+                return {
+                    name: addName.value.trim() || parsed.hostname.replace(/^www\./i, ''),
+                    url: cleanUrl,
+                    key: addKey.value.trim(),
+                    enabled: true
+                };
+            }
+
+            addTest.onclick = function () {
+                var candidate;
+                try {
+                    candidate = buildNewParser();
+                } catch (e) {
+                    message(addStatus, e.message, true);
+                    return;
+                }
+                testParser(candidate, function (text) {
+                    message(addStatus, text, /^Ошибка:|^Сначала|^Укажи|^Некоррект/.test(text));
+                });
+            };
+
+            addButton.onclick = function () {
+                try {
+                    var candidate = buildNewParser();
+                    var current = getParsers();
+                    var duplicate = current.some(function (item) {
+                        return item.url.replace(/\/+$/, '').toLowerCase() === candidate.url.toLowerCase();
+                    });
+                    if (duplicate) throw new Error('Этот парсер уже есть в списке.');
+                    current.push(candidate);
+                    saveParsers(current);
+                    render();
+                } catch (e) {
+                    message(addStatus, e.message, true);
+                }
+            };
+
+            host.appendChild(addCard);
         }
 
-        menu();
+        render();
     }
 
     /* ---------------- WORKER ---------------- */
@@ -982,7 +967,7 @@
                 items: [],
                 stats: [],
                 errors: [
-                    'Нет включённых парсеров. Открой «Настроить парсеры».'
+                    'Нет включённых парсеров. Открой панель RD и добавь парсер.'
                 ]
             });
         }
@@ -1146,7 +1131,9 @@
             '.rd-bridge-meta{font-size:12px;opacity:.8;overflow-wrap:anywhere}' +
             '.rd-bridge-button{display:inline-block;padding:10px 14px;margin:4px;border-radius:6px;background:#7a5cff;color:#fff;cursor:pointer;border:0}' +
             '.rd-bridge-status{margin:8px 0;white-space:pre-wrap;overflow-wrap:anywhere}' +
-            '.rd-bridge-input{box-sizing:border-box;width:100%;padding:12px;margin:8px 0;color:inherit;background:rgba(127,127,127,.12);border:1px solid rgba(127,127,127,.35);border-radius:6px}';
+            '.rd-bridge-input{box-sizing:border-box;width:100%;padding:12px;margin:8px 0;color:inherit;background:rgba(127,127,127,.12);border:1px solid rgba(127,127,127,.35);border-radius:6px}' +
+            '.rd-bridge-row .rd-bridge-input{background:rgba(255,255,255,.08)}' +
+            '.rd-bridge-row{border:1px solid rgba(127,127,127,.18)}';
 
         document.head.appendChild(style);
     }
@@ -1166,12 +1153,16 @@
             '<button class="rd-bridge-button" id="rd-check">Проверить подключение</button>' +
             '<button class="rd-bridge-button" id="rd-disconnect">Отключить RD</button>' +
             '<hr>' +
+            '<div id="rd-parser-manager"></div>' +
+            '<hr>' +
             '<input class="rd-bridge-input" id="rd-query" placeholder="Название фильма или сериала">' +
             '<button class="rd-bridge-button" id="rd-search">Найти раздачи</button>' +
             '<div id="rd-results"></div>';
 
         var status = panel.querySelector('#rd-status');
         var results = panel.querySelector('#rd-results');
+
+        renderParserManager(panel);
 
         function setStatus(text) {
             status.textContent = text;
@@ -1431,15 +1422,6 @@
                 'Пустое поле удаляет адрес.',
                 function () {
                     askProxyUrl();
-                }
-            );
-
-            addButton(
-                'rd_manage_parsers_v1',
-                'Настроить парсеры',
-                'Добавить, редактировать, включать, отключать, проверять и удалять парсеры.',
-                function () {
-                    parserManager();
                 }
             );
 
