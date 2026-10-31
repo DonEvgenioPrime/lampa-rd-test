@@ -1062,9 +1062,9 @@ function openSearch(query, movie) {
   var screen = document.createElement('div');
   screen.id = 'rd-card-search';
   screen.style.cssText =
-    'position:fixed;z-index:1000;inset:0;overflow:auto;' +
-    'background:#171717;color:#fff;padding:20px;padding-bottom:100px;' +
-    'box-sizing:border-box;font:16px Arial,sans-serif';
+    'position:fixed;z-index:999999;inset:0;overflow:auto;' +
+    'background:#171717;color:#fff;padding:20px;box-sizing:border-box;' +
+    'font:16px Arial,sans-serif';
 
   screen.innerHTML =
     '<div style="max-width:950px;margin:auto">' +
@@ -1092,10 +1092,72 @@ function openSearch(query, movie) {
 
   document.body.appendChild(screen);
 
+  // Keep Lampa's floating bottom navigation above the search overlay.
+  // The navigation is detected by its visible menu labels, not by a skin-specific class.
+  var rdRaisedNav = [];
+  function raiseLampaBottomNav() {
+    var labels = ['Назад', 'Главная', 'Поиск', 'Настройки'];
+    var candidates = Array.prototype.slice.call(document.body.querySelectorAll('*'));
+    var match = null;
+    var matchArea = Infinity;
+
+    candidates.forEach(function (el) {
+      if (screen.contains(el)) return;
+      var text = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!labels.every(function (label) { return text.indexOf(label) !== -1; })) return;
+
+      var rect = el.getBoundingClientRect();
+      if (rect.width < 100 || rect.height < 20 || rect.bottom < window.innerHeight - 190) return;
+
+      var area = rect.width * rect.height;
+      if (area < matchArea) {
+        match = el;
+        matchArea = area;
+      }
+    });
+
+    if (!match) return;
+
+    if (!match.__rdCardNavStyleSaved) {
+      match.__rdCardNavStyleSaved = {
+        position: match.style.position,
+        zIndex: match.style.zIndex
+      };
+      match.__rdCardNavStyleSavedFlag = true;
+      rdRaisedNav.push(match);
+    }
+
+    if (window.getComputedStyle(match).position === 'static') {
+      match.style.position = 'relative';
+    }
+    match.style.zIndex = '1000001';
+  }
+
+  raiseLampaBottomNav();
+  var rdNavObserver = null;
+  if (window.MutationObserver) {
+    rdNavObserver = new MutationObserver(function () {
+      raiseLampaBottomNav();
+    });
+    rdNavObserver.observe(document.body, { childList: true, subtree: true });
+  }
+
   var historyEntryActive = false;
   var closingFromHistory = false;
 
   function removeSearchOverlay() {
+    if (rdNavObserver) {
+      rdNavObserver.disconnect();
+      rdNavObserver = null;
+    }
+    rdRaisedNav.forEach(function (el) {
+      if (!el || !el.__rdCardNavStyleSaved) return;
+      el.style.position = el.__rdCardNavStyleSaved.position;
+      el.style.zIndex = el.__rdCardNavStyleSaved.zIndex;
+      delete el.__rdCardNavStyleSaved;
+      delete el.__rdCardNavStyleSavedFlag;
+    });
+    rdRaisedNav = [];
     if (screen.isConnected) screen.remove();
     window.removeEventListener('popstate', onBrowserBack, false);
   }
