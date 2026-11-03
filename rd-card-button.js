@@ -1055,17 +1055,28 @@ function openSearch(query, movie) {
   }
 
   var imdbId = getImdbId(movie);
-  var old = document.getElementById('rd-card-search');
+  Lampa.Activity.push({
+    component: 'rd_card_button_search',
+    title: 'Real-Debrid — поиск раздач',
+    query: query,
+    movie: movie,
+    access: access,
+    parserConfig: config,
+    imdbId: imdbId
+  });
+}
 
-  if (old) old.remove();
+function RdCardButtonSearchComponent(object) {
+  var query = object.query;
+  var movie = object.movie;
+  var access = object.access;
+  var config = object.parserConfig;
+  var imdbId = object.imdbId;
+  var screen;
 
-  var screen = document.createElement('div');
+  this.create = function () {
+  screen = document.createElement('div');
   screen.id = 'rd-card-search';
-  screen.style.cssText =
-    'position:fixed;z-index:999999;inset:0;overflow:auto;' +
-    'background:#171717;color:#fff;padding:20px;box-sizing:border-box;' +
-    'font:16px Arial,sans-serif';
-
   screen.innerHTML =
     '<div style="max-width:950px;margin:auto">' +
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">' +
@@ -1090,137 +1101,15 @@ function openSearch(query, movie) {
       '</details>' +
     '</div>';
 
-  document.body.appendChild(screen);
+  // Activity owns screen placement, navigation and Back handling.
+  screen.style.cssText =
+    'position:relative;width:100%;height:100%;overflow:auto;' +
+    'background:#171717;color:#fff;padding:20px;box-sizing:border-box;' +
+    'font:16px Arial,sans-serif';
 
-  // Keep Lampa's floating bottom navigation above the search overlay.
-  // The navigation is detected by its visible menu labels, not by a skin-specific class.
-  var rdRaisedNav = [];
-  function raiseLampaBottomNav() {
-    var labels = ['Назад', 'Главная', 'Поиск', 'Настройки'];
-    var candidates = Array.prototype.slice.call(document.body.querySelectorAll('*'));
-    var match = null;
-    var matchArea = Infinity;
-
-    candidates.forEach(function (el) {
-      if (screen.contains(el)) return;
-      var text = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
-      if (!labels.every(function (label) { return text.indexOf(label) !== -1; })) return;
-
-      var rect = el.getBoundingClientRect();
-      if (rect.width < 100 || rect.height < 20 || rect.bottom < window.innerHeight - 190) return;
-
-      var area = rect.width * rect.height;
-      if (area < matchArea) {
-        match = el;
-        matchArea = area;
-      }
-    });
-
-    if (!match) return;
-
-    if (!match.__rdCardNavStyleSaved) {
-      match.__rdCardNavStyleSaved = {
-        position: match.style.position,
-        zIndex: match.style.zIndex
-      };
-      match.__rdCardNavStyleSavedFlag = true;
-      rdRaisedNav.push(match);
-    }
-
-    if (window.getComputedStyle(match).position === 'static') {
-      match.style.position = 'relative';
-    }
-    match.style.zIndex = '1000001';
-  }
-
-  raiseLampaBottomNav();
-  var rdNavObserver = null;
-  if (window.MutationObserver) {
-    rdNavObserver = new MutationObserver(function () {
-      raiseLampaBottomNav();
-    });
-    rdNavObserver.observe(document.body, { childList: true, subtree: true });
-  }
-
-  var historyEntryActive = false;
-  var closingFromHistory = false;
-
-  function removeSearchOverlay() {
-    if (rdNavObserver) {
-      rdNavObserver.disconnect();
-      rdNavObserver = null;
-    }
-    rdRaisedNav.forEach(function (el) {
-      if (!el || !el.__rdCardNavStyleSaved) return;
-      el.style.position = el.__rdCardNavStyleSaved.position;
-      el.style.zIndex = el.__rdCardNavStyleSaved.zIndex;
-      delete el.__rdCardNavStyleSaved;
-      delete el.__rdCardNavStyleSavedFlag;
-    });
-    rdRaisedNav = [];
-    if (screen.isConnected) screen.remove();
-    window.removeEventListener('popstate', onBrowserBack, false);
-  }
-
-  function onBrowserBack() {
-    if (!screen.isConnected) {
-      window.removeEventListener('popstate', onBrowserBack, false);
-      return;
-    }
-
-    var sortMenu = screen.querySelector('#rd-sort-menu');
-
-    if (sortMenu) {
-      // The browser Back button closes the sort layer first.
-      sortMenu.remove();
-
-      // Restore the search entry so the next Back closes Card Button.
-      history.pushState(
-        { rdCardButtonSearch: true, rdCardButtonId: screen.__rdHistoryId },
-        '',
-        window.location.href
-      );
-      return;
-    }
-
-    closingFromHistory = true;
-    historyEntryActive = false;
-    removeSearchOverlay();
-  }
-
-  function closeSearch() {
-    if (!screen.isConnected) return;
-
-    var sortMenu = screen.querySelector('#rd-sort-menu');
-
-    if (sortMenu) {
-      sortMenu.remove();
-      return;
-    }
-
-    removeSearchOverlay();
-
-    // Remove our own history entry without navigating away from the movie card.
-    if (historyEntryActive && !closingFromHistory) {
-      historyEntryActive = false;
-      history.back();
-    }
-  }
-
-  screen.querySelector('#rd-close').onclick = closeSearch;
-
-  screen.__rdHistoryId = Date.now() + '-' + Math.floor(Math.random() * 100000);
-  try {
-    history.pushState(
-      { rdCardButtonSearch: true, rdCardButtonId: screen.__rdHistoryId },
-      '',
-      window.location.href
-    );
-    historyEntryActive = true;
-    window.addEventListener('popstate', onBrowserBack, false);
-  } catch (historyError) {
-    console.warn('[RD Card Button] Не удалось добавить запись истории:', historyError);
-  }
+  screen.querySelector('#rd-close').onclick = function () {
+    Lampa.Activity.backward();
+  };
 
   screen.querySelector('#rd-get-id').onclick = function () {
     getRDUserId(screen, this);
@@ -1376,7 +1265,14 @@ function openSearch(query, movie) {
         'Ошибка поиска: ' + err.message;
     }
   });
+  return screen;
+  };
+
+  this.render = function () { return screen; };
+  this.start = function () {};
+  this.back = function () { Lampa.Activity.backward(); };
 }
+
 
 /* ---------- Кнопка в карточке фильма Lampa ---------- */
 
@@ -1427,6 +1323,9 @@ function boot() {
       window.__rd_card_listener) return;
 
   window.__rd_card_listener = true;
+  if (Lampa.Component && Lampa.Component.add) {
+    Lampa.Component.add('rd_card_button_search', RdCardButtonSearchComponent);
+  }
   Lampa.Listener.follow('full', addButton);
 }
 
