@@ -488,7 +488,33 @@ function checkDMM(imdbId, hashes, access) {
       imdbId: imdbId,
       hashes: hashes.slice(0, 100)
     })
-  }).then(parseResponse);
+  }).then(function (response) {
+    var httpStatus = response.status;
+    var responseType = response.headers && response.headers.get
+      ? response.headers.get('content-type') || 'не указан'
+      : 'недоступен';
+
+    return parseResponse(response).then(function (data) {
+      // Keep the API payload (without request headers/token) available for diagnostics.
+      if (data && typeof data === 'object') {
+        data.__rdDiagnostic = {
+          httpStatus: httpStatus,
+          contentType: responseType
+        };
+      }
+      return data;
+    }, function (error) {
+      error.rdHttpStatus = httpStatus;
+      error.rdContentType = responseType;
+      throw error;
+    });
+  }).catch(function (error) {
+    // Network/CORS/proxy errors do not have an HTTP response. Never log auth headers.
+    if (error && !error.rdHttpStatus) {
+      error.rdDiagnostic = 'Сетевой сбой, CORS или Worker не вернул HTTP-ответ';
+    }
+    throw error;
+  });
 }
 
 function findHashResult(data, hash) {
@@ -709,7 +735,11 @@ function runCacheCheck(items, imdbId, access, screen) {
         if (!screen.isConnected) return;
 
         if (!data || !Array.isArray(data.available)) {
-          throw new Error('Ответ DMM не содержит массива available');
+          var shapeError = new Error('Ответ DMM не содержит массива available');
+          shapeError.responseSummary = data && typeof data === 'object'
+            ? Object.keys(data).join(', ')
+            : String(data);
+          throw shapeError;
         }
 
         batch.forEach(function (item) {
@@ -726,7 +756,17 @@ function runCacheCheck(items, imdbId, access, screen) {
         });
       });
     }).catch(function (err) {
-      errors.push(err.message);
+      var batchHashes = batch.map(function (item) { return item.hash; });
+      errors.push(
+        'Пакет (' + batch.length + ' хэшей), первые хэши: ' +
+        batchHashes.slice(0, 5).join(', ') +
+        (batchHashes.length > 5 ? ' …' : '') +
+        '\nОшибка: ' + (err && err.message ? err.message : String(err)) +
+        (err && err.rdHttpStatus ? '\nHTTP статус: ' + err.rdHttpStatus : '') +
+        (err && err.rdContentType ? '\nContent-Type: ' + err.rdContentType : '') +
+        (err && err.rdDiagnostic ? '\nДиагностика: ' + err.rdDiagnostic : '') +
+        (err && err.responseSummary ? '\nПоля ответа: ' + err.responseSummary : '')
+      );
 
       batch.forEach(function (item) {
         item.cacheState = 'error';
@@ -750,7 +790,8 @@ function runCacheCheck(items, imdbId, access, screen) {
         '\nПроверено раздач: ' + items.length +
         '\nПодтверждено: ' + cachedCount +
         '\nБез подтверждения: ' + unknownCount +
-        (errors.length ? '\nОшибки:\n' + errors.join('\n') : '');
+        (errors.length ? '\nОшибки проверки (ответ/HTTP/сеть):\n' + errors.join('\n\n') : '') +
+        '\n\nСекретные заголовки и API-ключ не выводятся.';
     }
 
     renderCards(screen);
