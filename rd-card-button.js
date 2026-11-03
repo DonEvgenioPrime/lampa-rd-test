@@ -782,16 +782,23 @@ function runCacheCheck(items, imdbId, access, screen) {
       ' · без подтверждения: ' + unknownCount +
       (errors.length ? ' · ошибок: ' + errors.length : '');
 
-    var diag = screen.querySelector('#rd-dmm-diagnostic');
-
+    // Add DMM diagnostics to the existing top-level search diagnostics,
+    // where the Lampa bottom navigation cannot cover the output.
+    var diag = screen.__rdSearchDiagPre;
     if (diag) {
-      diag.textContent =
-        'IMDb ID: ' + imdbId +
-        '\nПроверено раздач: ' + items.length +
-        '\nПодтверждено: ' + cachedCount +
-        '\nБез подтверждения: ' + unknownCount +
-        (errors.length ? '\nОшибки проверки (ответ/HTTP/сеть):\n' + errors.join('\n\n') : '') +
-        '\n\nСекретные заголовки и API-ключ не выводятся.';
+      var dmmReport = [
+        '\n\n===== Проверка DMM =====',
+        'IMDb ID: ' + imdbId,
+        'Проверено раздач: ' + items.length,
+        'Подтверждено: ' + cachedCount,
+        'Без подтверждения: ' + unknownCount,
+        'Ошибок: ' + errors.length
+      ];
+      if (errors.length) {
+        dmmReport.push('Ошибки проверки (ответ/HTTP/сеть):\n' + errors.join('\n\n'));
+      }
+      dmmReport.push('Секретные заголовки и API-ключ не выводятся.');
+      diag.textContent += dmmReport.join('\n');
     }
 
     renderCards(screen);
@@ -1136,10 +1143,6 @@ function RdCardButtonSearchComponent(object) {
         'Используется тот же сохранённый парсер и API-ключ, что и в rd-test. Зелёная метка означает, что DMM вернул хэш в available с непустым files. Отсутствие подтверждения не доказывает отсутствие кеша в Real-Debrid.' +
       '</div>' +
       '<div id="rd-results"></div>' +
-      '<details style="margin-top:16px;padding:12px;background:#292929;border-radius:8px">' +
-        '<summary>Ответ DMM / диагностика</summary>' +
-        '<pre id="rd-dmm-diagnostic" style="white-space:pre-wrap;overflow-wrap:anywhere;font:12px monospace"></pre>' +
-      '</details>' +
     '</div>';
 
   // Activity owns screen placement, navigation and Back handling.
@@ -1276,6 +1279,7 @@ function RdCardButtonSearchComponent(object) {
     }
 
     pre.textContent = report.join('\n');
+    screen.__rdSearchDiagPre = pre;
     details.appendChild(pre);
     box.appendChild(details);
 
