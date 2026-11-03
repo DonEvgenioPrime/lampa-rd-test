@@ -488,33 +488,7 @@ function checkDMM(imdbId, hashes, access) {
       imdbId: imdbId,
       hashes: hashes.slice(0, 100)
     })
-  }).then(function (response) {
-    var httpStatus = response.status;
-    var responseType = response.headers && response.headers.get
-      ? response.headers.get('content-type') || 'не указан'
-      : 'недоступен';
-
-    return parseResponse(response).then(function (data) {
-      // Keep the API payload (without request headers/token) available for diagnostics.
-      if (data && typeof data === 'object') {
-        data.__rdDiagnostic = {
-          httpStatus: httpStatus,
-          contentType: responseType
-        };
-      }
-      return data;
-    }, function (error) {
-      error.rdHttpStatus = httpStatus;
-      error.rdContentType = responseType;
-      throw error;
-    });
-  }).catch(function (error) {
-    // Network/CORS/proxy errors do not have an HTTP response. Never log auth headers.
-    if (error && !error.rdHttpStatus) {
-      error.rdDiagnostic = 'Сетевой сбой, CORS или Worker не вернул HTTP-ответ';
-    }
-    throw error;
-  });
+  }).then(parseResponse);
 }
 
 function findHashResult(data, hash) {
@@ -735,11 +709,7 @@ function runCacheCheck(items, imdbId, access, screen) {
         if (!screen.isConnected) return;
 
         if (!data || !Array.isArray(data.available)) {
-          var shapeError = new Error('Ответ DMM не содержит массива available');
-          shapeError.responseSummary = data && typeof data === 'object'
-            ? Object.keys(data).join(', ')
-            : String(data);
-          throw shapeError;
+          throw new Error('Ответ DMM не содержит массива available');
         }
 
         batch.forEach(function (item) {
@@ -756,17 +726,7 @@ function runCacheCheck(items, imdbId, access, screen) {
         });
       });
     }).catch(function (err) {
-      var batchHashes = batch.map(function (item) { return item.hash; });
-      errors.push(
-        'Пакет (' + batch.length + ' хэшей), первые хэши: ' +
-        batchHashes.slice(0, 5).join(', ') +
-        (batchHashes.length > 5 ? ' …' : '') +
-        '\nОшибка: ' + (err && err.message ? err.message : String(err)) +
-        (err && err.rdHttpStatus ? '\nHTTP статус: ' + err.rdHttpStatus : '') +
-        (err && err.rdContentType ? '\nContent-Type: ' + err.rdContentType : '') +
-        (err && err.rdDiagnostic ? '\nДиагностика: ' + err.rdDiagnostic : '') +
-        (err && err.responseSummary ? '\nПоля ответа: ' + err.responseSummary : '')
-      );
+      errors.push(err.message);
 
       batch.forEach(function (item) {
         item.cacheState = 'error';
@@ -782,23 +742,15 @@ function runCacheCheck(items, imdbId, access, screen) {
       ' · без подтверждения: ' + unknownCount +
       (errors.length ? ' · ошибок: ' + errors.length : '');
 
-    // Add DMM diagnostics to the existing top-level search diagnostics,
-    // where the Lampa bottom navigation cannot cover the output.
-    var diag = screen.__rdSearchDiagPre;
+    var diag = screen.querySelector('#rd-dmm-diagnostic');
+
     if (diag) {
-      var dmmReport = [
-        '\n\n===== Проверка DMM =====',
-        'IMDb ID: ' + imdbId,
-        'Проверено раздач: ' + items.length,
-        'Подтверждено: ' + cachedCount,
-        'Без подтверждения: ' + unknownCount,
-        'Ошибок: ' + errors.length
-      ];
-      if (errors.length) {
-        dmmReport.push('Ошибки проверки (ответ/HTTP/сеть):\n' + errors.join('\n\n'));
-      }
-      dmmReport.push('Секретные заголовки и API-ключ не выводятся.');
-      diag.textContent += dmmReport.join('\n');
+      diag.textContent =
+        'IMDb ID: ' + imdbId +
+        '\nПроверено раздач: ' + items.length +
+        '\nПодтверждено: ' + cachedCount +
+        '\nБез подтверждения: ' + unknownCount +
+        (errors.length ? '\nОшибки:\n' + errors.join('\n') : '');
     }
 
     renderCards(screen);
@@ -1103,28 +1055,17 @@ function openSearch(query, movie) {
   }
 
   var imdbId = getImdbId(movie);
-  Lampa.Activity.push({
-    component: 'rd_card_button_search',
-    title: 'Real-Debrid — поиск раздач',
-    query: query,
-    movie: movie,
-    access: access,
-    parserConfig: config,
-    imdbId: imdbId
-  });
-}
+  var old = document.getElementById('rd-card-search');
 
-function RdCardButtonSearchComponent(object) {
-  var query = object.query;
-  var movie = object.movie;
-  var access = object.access;
-  var config = object.parserConfig;
-  var imdbId = object.imdbId;
-  var screen;
+  if (old) old.remove();
 
-  this.create = function () {
-  screen = document.createElement('div');
+  var screen = document.createElement('div');
   screen.id = 'rd-card-search';
+  screen.style.cssText =
+    'position:fixed;z-index:999999;inset:0;overflow:auto;' +
+    'background:#171717;color:#fff;padding:20px;box-sizing:border-box;' +
+    'font:16px Arial,sans-serif';
+
   screen.innerHTML =
     '<div style="max-width:950px;margin:auto">' +
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">' +
@@ -1143,17 +1084,143 @@ function RdCardButtonSearchComponent(object) {
         'Используется тот же сохранённый парсер и API-ключ, что и в rd-test. Зелёная метка означает, что DMM вернул хэш в available с непустым files. Отсутствие подтверждения не доказывает отсутствие кеша в Real-Debrid.' +
       '</div>' +
       '<div id="rd-results"></div>' +
+      '<details style="margin-top:16px;padding:12px;background:#292929;border-radius:8px">' +
+        '<summary>Ответ DMM / диагностика</summary>' +
+        '<pre id="rd-dmm-diagnostic" style="white-space:pre-wrap;overflow-wrap:anywhere;font:12px monospace"></pre>' +
+      '</details>' +
     '</div>';
 
-  // Activity owns screen placement, navigation and Back handling.
-  screen.style.cssText =
-    'position:relative;width:100%;height:100%;overflow:auto;' +
-    'background:#171717;color:#fff;padding:20px;box-sizing:border-box;' +
-    'font:16px Arial,sans-serif';
+  document.body.appendChild(screen);
 
-  screen.querySelector('#rd-close').onclick = function () {
-    Lampa.Activity.backward();
-  };
+  // Keep Lampa's floating bottom navigation above the search overlay.
+  // The navigation is detected by its visible menu labels, not by a skin-specific class.
+  var rdRaisedNav = [];
+  function raiseLampaBottomNav() {
+    var labels = ['Назад', 'Главная', 'Поиск', 'Настройки'];
+    var candidates = Array.prototype.slice.call(document.body.querySelectorAll('*'));
+    var match = null;
+    var matchArea = Infinity;
+
+    candidates.forEach(function (el) {
+      if (screen.contains(el)) return;
+      var text = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!labels.every(function (label) { return text.indexOf(label) !== -1; })) return;
+
+      var rect = el.getBoundingClientRect();
+      if (rect.width < 100 || rect.height < 20 || rect.bottom < window.innerHeight - 190) return;
+
+      var area = rect.width * rect.height;
+      if (area < matchArea) {
+        match = el;
+        matchArea = area;
+      }
+    });
+
+    if (!match) return;
+
+    if (!match.__rdCardNavStyleSaved) {
+      match.__rdCardNavStyleSaved = {
+        position: match.style.position,
+        zIndex: match.style.zIndex
+      };
+      match.__rdCardNavStyleSavedFlag = true;
+      rdRaisedNav.push(match);
+    }
+
+    if (window.getComputedStyle(match).position === 'static') {
+      match.style.position = 'relative';
+    }
+    match.style.zIndex = '1000001';
+  }
+
+  raiseLampaBottomNav();
+  var rdNavObserver = null;
+  if (window.MutationObserver) {
+    rdNavObserver = new MutationObserver(function () {
+      raiseLampaBottomNav();
+    });
+    rdNavObserver.observe(document.body, { childList: true, subtree: true });
+  }
+
+  var historyEntryActive = false;
+  var closingFromHistory = false;
+
+  function removeSearchOverlay() {
+    if (rdNavObserver) {
+      rdNavObserver.disconnect();
+      rdNavObserver = null;
+    }
+    rdRaisedNav.forEach(function (el) {
+      if (!el || !el.__rdCardNavStyleSaved) return;
+      el.style.position = el.__rdCardNavStyleSaved.position;
+      el.style.zIndex = el.__rdCardNavStyleSaved.zIndex;
+      delete el.__rdCardNavStyleSaved;
+      delete el.__rdCardNavStyleSavedFlag;
+    });
+    rdRaisedNav = [];
+    if (screen.isConnected) screen.remove();
+    window.removeEventListener('popstate', onBrowserBack, false);
+  }
+
+  function onBrowserBack() {
+    if (!screen.isConnected) {
+      window.removeEventListener('popstate', onBrowserBack, false);
+      return;
+    }
+
+    var sortMenu = screen.querySelector('#rd-sort-menu');
+
+    if (sortMenu) {
+      // The browser Back button closes the sort layer first.
+      sortMenu.remove();
+
+      // Restore the search entry so the next Back closes Card Button.
+      history.pushState(
+        { rdCardButtonSearch: true, rdCardButtonId: screen.__rdHistoryId },
+        '',
+        window.location.href
+      );
+      return;
+    }
+
+    closingFromHistory = true;
+    historyEntryActive = false;
+    removeSearchOverlay();
+  }
+
+  function closeSearch() {
+    if (!screen.isConnected) return;
+
+    var sortMenu = screen.querySelector('#rd-sort-menu');
+
+    if (sortMenu) {
+      sortMenu.remove();
+      return;
+    }
+
+    removeSearchOverlay();
+
+    // Remove our own history entry without navigating away from the movie card.
+    if (historyEntryActive && !closingFromHistory) {
+      historyEntryActive = false;
+      history.back();
+    }
+  }
+
+  screen.querySelector('#rd-close').onclick = closeSearch;
+
+  screen.__rdHistoryId = Date.now() + '-' + Math.floor(Math.random() * 100000);
+  try {
+    history.pushState(
+      { rdCardButtonSearch: true, rdCardButtonId: screen.__rdHistoryId },
+      '',
+      window.location.href
+    );
+    historyEntryActive = true;
+    window.addEventListener('popstate', onBrowserBack, false);
+  } catch (historyError) {
+    console.warn('[RD Card Button] Не удалось добавить запись истории:', historyError);
+  }
 
   screen.querySelector('#rd-get-id').onclick = function () {
     getRDUserId(screen, this);
@@ -1279,7 +1346,6 @@ function RdCardButtonSearchComponent(object) {
     }
 
     pre.textContent = report.join('\n');
-    screen.__rdSearchDiagPre = pre;
     details.appendChild(pre);
     box.appendChild(details);
 
@@ -1310,14 +1376,7 @@ function RdCardButtonSearchComponent(object) {
         'Ошибка поиска: ' + err.message;
     }
   });
-  return screen;
-  };
-
-  this.render = function () { return screen; };
-  this.start = function () {};
-  this.back = function () { Lampa.Activity.backward(); };
 }
-
 
 /* ---------- Кнопка в карточке фильма Lampa ---------- */
 
@@ -1368,9 +1427,6 @@ function boot() {
       window.__rd_card_listener) return;
 
   window.__rd_card_listener = true;
-  if (Lampa.Component && Lampa.Component.add) {
-    Lampa.Component.add('rd_card_button_search', RdCardButtonSearchComponent);
-  }
   Lampa.Listener.follow('full', addButton);
 }
 
