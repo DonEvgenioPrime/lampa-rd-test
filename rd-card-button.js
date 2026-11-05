@@ -2,6 +2,7 @@
 'use strict';
 
 if (window.__rd_card_button_search) return;
+// OAuth refresh fix: mirrors rd-test's shared-token recovery.
 window.__rd_card_button_search = true;
 
 var PROXY_STORE = 'rd_bridge_worker_url_v1';
@@ -45,11 +46,59 @@ function requireProxy() {
 }
 
 function token() {
-  try {
-    return JSON.parse(localStorage.getItem(STORE) || '{}').access_token || '';
-  } catch (e) {
-    return '';
+  try { return JSON.parse(localStorage.getItem(STORE) || '{}').access_token || ''; }
+  catch (e) { return ''; }
+}
+
+function readAuth() {
+  try { return JSON.parse(localStorage.getItem(STORE) || 'null'); }
+  catch (e) { return null; }
+}
+
+function saveAuth(auth) {
+  localStorage.setItem(STORE, JSON.stringify(auth));
+}
+
+function refreshAccessToken(auth) {
+  if (!auth || !auth.refresh_token || !auth.client_id || !auth.client_secret) {
+    return Promise.reject(new Error(
+      'Нет данных для обновления RD-токена. Переподключи Real-Debrid в rd-test.'
+    ));
   }
+  return postForm('https://api.real-debrid.com/oauth/v2/token', '', {
+    client_id: auth.client_id,
+    client_secret: auth.client_secret,
+    code: auth.refresh_token,
+    grant_type: 'http://oauth.net/grant_type/device/1.0'
+  }).then(function (tokens) {
+    if (!tokens || !tokens.access_token) throw new Error('RD не вернул новый access_token.');
+    var updated = Object.assign({}, auth, {
+      access_token: tokens.access_token,
+      refresh_token: tokens.refresh_token || auth.refresh_token,
+      expires_in: Number(tokens.expires_in) || 0,
+      obtained_at: Date.now()
+    });
+    saveAuth(updated);
+    return updated;
+  });
+}
+
+// Mirrors rd-test: validate the stored token, then refresh it after HTTP 401.
+function getWorkingAuth() {
+  var auth = readAuth();
+  if (!auth || !auth.access_token) {
+    return Promise.reject(new Error('Real-Debrid не подключён. Подключи RD в настройках.'));
+  }
+  return req(RD + 'user', auth.access_token).then(function (user) {
+    return { auth: auth, user: user };
+  }).catch(function (error) {
+    if (!/HTTP 401|bad_token|unauthorized|Invalid Real-Debrid authorization/i.test(error.message || '')) throw error;
+    return refreshAccessToken(auth).then(function (updated) {
+      return req(RD + 'user', updated.access_token).then(function (user) {
+        return { auth: updated, user: user };
+      });
+    });
+  });
 }
 
 function getSortMode() {
@@ -458,7 +507,7 @@ function sortItems(items, mode) {
 
 /* ---------- Проверка DMM ---------- */
 
-function checkDMM(imdbId, hashes, access) {
+function checkDMM(imdbId, hashes, access, retryAuth) {
   if (!imdbId) {
     return Promise.reject(
       new Error('IMDb ID фильма не найден в данных Lampa')
@@ -509,6 +558,11 @@ function checkDMM(imdbId, hashes, access) {
       throw error;
     });
   }).catch(function (error) {
+    if (error && error.rdHttpStatus === 401 && retryAuth !== false) {
+      return getWorkingAuth().then(function (authResult) {
+        return checkDMM(imdbId, hashes, authResult.auth.access_token, false);
+      });
+    }
     // Network/CORS/proxy errors do not have an HTTP response. Never log auth headers.
     if (error && !error.rdHttpStatus) {
       error.rdDiagnostic = 'Сетевой сбой, CORS или Worker не вернул HTTP-ответ';
@@ -1079,19 +1133,8 @@ function renderCards(screen) {
 /* ---------- Поиск и объединение результатов ---------- */
 
 function openSearch(query, movie) {
-  var access = token();
-
-  if (!access) {
-    note('Сначала подключи Real-Debrid в настройках.');
-    return;
-  }
-
-  try {
-    requireProxy();
-  } catch (e) {
-    note(e.message);
-    return;
-  }
+  try { requireProxy(); }
+  catch (e) { note(e.message); return; }
 
   var config;
 
@@ -1103,14 +1146,18 @@ function openSearch(query, movie) {
   }
 
   var imdbId = getImdbId(movie);
-  Lampa.Activity.push({
-    component: 'rd_card_button_search',
-    title: 'Real-Debrid — поиск раздач',
-    query: query,
-    movie: movie,
-    access: access,
-    parserConfig: config,
-    imdbId: imdbId
+  getWorkingAuth().then(function (authResult) {
+    Lampa.Activity.push({
+      component: 'rd_card_button_search',
+      title: 'Real-Debrid — поиск раздач',
+      query: query,
+      movie: movie,
+      access: authResult.auth.access_token,
+      parserConfig: config,
+      imdbId: imdbId
+    });
+  }).catch(function (err) {
+    note('Авторизация RD: ' + (err.message || String(err)));
   });
 }
 
