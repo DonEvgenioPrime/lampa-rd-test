@@ -946,7 +946,7 @@ function testOne(item, button, resultNode) {
 /* ---------- Меню сортировки ---------- */
 
 function openSortMenu(screen) {
-  var old = screen.querySelector('#rd-sort-menu');
+  var old = document.getElementById('rd-sort-menu');
 
   if (old) {
     old.remove();
@@ -956,7 +956,7 @@ function openSortMenu(screen) {
   var menu = document.createElement('div');
   menu.id = 'rd-sort-menu';
   menu.style.cssText =
-    'position:fixed;z-index:1000002;inset:0;background:rgba(0,0,0,.7);' +
+    'position:fixed;z-index:2147483647;inset:0;background:rgba(0,0,0,.7);' +
     'display:flex;align-items:flex-end;justify-content:center;padding:12px;box-sizing:border-box';
 
   var panel = document.createElement('div');
@@ -1005,7 +1005,7 @@ function openSortMenu(screen) {
     if (event.target === menu) menu.remove();
   });
 
-  screen.appendChild(menu);
+  document.body.appendChild(menu);
 }
 
 /* ---------- Карточки результатов ---------- */
@@ -1176,10 +1176,6 @@ function RdCardButtonSearchComponent(object) {
     '<div style="max-width:950px;margin:auto">' +
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">' +
         '<h2>Real-Debrid — поиск раздач</h2>' +
-        '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
-          '<button id="rd-get-id">Получить RD_USER_ID</button>' +
-          '<button id="rd-close">Закрыть</button>' +
-        '</div>' +
       '</div>' +
       '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0">' +
         '<button id="rd-sort-button" style="padding:10px 14px;border:1px solid #666;border-radius:8px;background:#333;color:#fff;cursor:pointer;touch-action:manipulation">Сортировка</button>' +
@@ -1198,13 +1194,15 @@ function RdCardButtonSearchComponent(object) {
     'background:#171717;color:#fff;padding:20px;box-sizing:border-box;' +
     'font:16px Arial,sans-serif';
 
-  screen.querySelector('#rd-close').onclick = function () {
-    Lampa.Activity.backward();
-  };
-
-  screen.querySelector('#rd-get-id').onclick = function () {
-    getRDUserId(screen, this);
-  };
+  // Fade scrolling content beneath Lampa's bottom navigation.
+  var bottomFade = document.createElement('div');
+  bottomFade.id = 'rd-bottom-fade';
+  bottomFade.style.cssText =
+    'position:absolute;left:0;right:0;bottom:0;height:112px;' +
+    'pointer-events:none;z-index:2;' +
+    'background:linear-gradient(to bottom,rgba(23,23,23,0) 0%,' +
+    'rgba(23,23,23,.72) 58%,rgba(23,23,23,1) 100%)';
+  screen.appendChild(bottomFade);
 
   screen.querySelector('#rd-sort-button').onclick = function (event) {
     event.preventDefault();
@@ -1362,7 +1360,11 @@ function RdCardButtonSearchComponent(object) {
 
   this.render = function () { return screen; };
   this.start = function () {};
-  this.back = function () { Lampa.Activity.backward(); };
+  this.back = function () {
+    var menu = document.getElementById('rd-sort-menu');
+    if (menu) menu.remove();
+    Lampa.Activity.backward();
+  };
 }
 
 
