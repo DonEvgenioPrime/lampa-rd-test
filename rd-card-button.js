@@ -1173,7 +1173,6 @@ function RdCardButtonSearchComponent(object) {
   screen = document.createElement('div');
   screen.id = 'rd-card-search';
   screen.innerHTML =
-    '<div id="rd-scroll-fade-top" aria-hidden="true" style="position:sticky;top:-20px;height:42px;margin:-20px -20px 0;z-index:20;pointer-events:none;background:linear-gradient(to bottom,#171717 0%,rgba(23,23,23,.92) 35%,rgba(23,23,23,0) 100%)"></div>' +
     '<div style="max-width:950px;margin:auto">' +
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">' +
         '<h2>Real-Debrid — поиск раздач</h2>' +
@@ -1187,17 +1186,18 @@ function RdCardButtonSearchComponent(object) {
         'Используется тот же сохранённый парсер и API-ключ, что и в rd-test. Зелёная метка означает, что DMM вернул хэш в available с непустым files. Отсутствие подтверждения не доказывает отсутствие кеша в Real-Debrid.' +
       '</div>' +
       '<div id="rd-results"></div>' +
-    '</div>' +
-    '<div id="rd-scroll-fade-bottom" aria-hidden="true" style="position:sticky;bottom:-20px;height:54px;margin:0 -20px -20px;z-index:20;pointer-events:none;background:linear-gradient(to top,#171717 0%,rgba(23,23,23,.9) 35%,rgba(23,23,23,0) 100%)"></div>';
+    '</div>';
 
   // Activity owns screen placement, navigation and Back handling.
   screen.style.cssText =
-    'position:relative;width:100%;height:100%;overflow:auto;' +
-    'background:#171717;color:#fff;padding:20px;box-sizing:border-box;' +
+    'position:relative;width:100%;height:100%;min-height:0;overflow-y:auto;overflow-x:hidden;' +
+    'background:#171717;color:#fff;padding:20px 20px 32px;box-sizing:border-box;' +
+    'overscroll-behavior:contain;' +
     'font:16px Arial,sans-serif';
 
-  // Edge fades are sticky within this scroll container, so cards pass beneath
-  // them while scrolling. They do not cover the center of the content.
+  // Keep the result list as one native scroll area. Do not place gradient
+  // overlays over the content: Lampa's own top and bottom panels should
+  // visually cover the scrolling activity instead.
 
   screen.querySelector('#rd-sort-button').onclick = function (event) {
     event.preventDefault();
