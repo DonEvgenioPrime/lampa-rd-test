@@ -1168,11 +1168,15 @@ function RdCardButtonSearchComponent(object) {
   var config = object.parserConfig;
   var imdbId = object.imdbId;
   var screen;
+  var rdScroll;
 
   this.create = function () {
-  screen = document.createElement('div');
+  // TorBox-style native Lampa scroll: mask + overlay scrolling.
+  rdScroll = new Lampa.Scroll({ mask: true, over: true, step: 250 });
+  screen = rdScroll.render()[0];
   screen.id = 'rd-card-search';
-  screen.innerHTML =
+  var scrollBody = rdScroll.body()[0];
+  scrollBody.innerHTML =
     '<div style="max-width:950px;margin:auto">' +
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">' +
         '<h2>Real-Debrid — поиск раздач</h2>' +
@@ -1188,16 +1192,12 @@ function RdCardButtonSearchComponent(object) {
       '<div id="rd-results"></div>' +
     '</div>';
 
-  // Keep this Activity's content scrollable. Without an explicit bounded
-  // height and overflow-y:auto, long result lists cannot be scrolled.
-  // Lampa's top/bottom panels should overlay this scroll viewport via their
-  // own stacking order; do not add fades over result cards.
-  screen.style.cssText =
-    'position:relative;width:100%;height:100%;min-height:0;' +
-    'overflow-y:auto;overflow-x:hidden;touch-action:pan-y;' +
-    'background:#171717;color:#fff;padding:20px 20px 32px;box-sizing:border-box;' +
-    'font:16px Arial,sans-serif;' +
-    '-webkit-overflow-scrolling:touch;overscroll-behavior:contain';
+  // Layout is controlled by Lampa.Scroll (same mask/over mode as TorBox).
+  // Keep the activity root transparent; content styling belongs to scroll body.
+  scrollBody.style.cssText =
+    'width:100%;min-height:100%;padding:20px 20px 32px;box-sizing:border-box;' +
+    'background:#171717;color:#fff;font:16px Arial,sans-serif;';
+  screen.style.cssText = 'width:100%;height:100%;min-height:0;';
 
   screen.querySelector('#rd-sort-button').onclick = function (event) {
     event.preventDefault();
