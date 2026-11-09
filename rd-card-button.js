@@ -1190,14 +1190,13 @@ function RdCardButtonSearchComponent(object) {
 
   // Activity owns screen placement, navigation and Back handling.
   screen.style.cssText =
-    'position:relative;width:100%;height:100%;min-height:0;overflow-y:auto;overflow-x:hidden;' +
+    'position:relative;width:100%;height:auto;min-height:0;overflow:visible;' +
     'background:#171717;color:#fff;padding:20px 20px 32px;box-sizing:border-box;' +
-    'overscroll-behavior:contain;' +
     'font:16px Arial,sans-serif';
 
-  // Keep the result list as one native scroll area. Do not place gradient
-  // overlays over the content: Lampa's own top and bottom panels should
-  // visually cover the scrolling activity instead.
+  // Important: do not create a nested scroll container here.
+  // Lampa's Activity owns scrolling and keeps its navigation panels above
+  // the activity content. This component should grow naturally with results.
 
   screen.querySelector('#rd-sort-button').onclick = function (event) {
     event.preventDefault();
