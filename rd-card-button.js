@@ -1188,13 +1188,14 @@ function RdCardButtonSearchComponent(object) {
       '<div id="rd-results"></div>' +
     '</div>';
 
-  // Keep this Activity's content scrollable. Without an explicit bounded
-  // height and overflow-y:auto, long result lists cannot be scrolled.
-  // Lampa's top/bottom panels should overlay this scroll viewport via their
-  // own stacking order; do not add fades over result cards.
+  // Keep the Activity as the native scroll viewport. Clip its visible lower
+  // edge above Lampa's translucent bottom navigation: cards can scroll normally,
+  // but cannot render through the navigation glass. The clip is visual only and
+  // does not replace or disable overflow scrolling.
   screen.style.cssText =
     'position:relative;width:100%;height:100%;min-height:0;' +
     'overflow-y:auto;overflow-x:hidden;touch-action:pan-y;' +
+    'clip-path:inset(0 0 104px 0);' +
     'background:#171717;color:#fff;padding:20px 20px 32px;box-sizing:border-box;' +
     'font:16px Arial,sans-serif;' +
     '-webkit-overflow-scrolling:touch;overscroll-behavior:contain';
