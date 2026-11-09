@@ -11,13 +11,13 @@ var STORE = 'rd_bridge_oauth_v2';
 var SORT_STORE = 'rd_card_button_sort_v1';
 
 var SORT_OPTIONS = [
-    { value: 'seeders', label: 'По сидам (убыв.)' },
-    { value: 'size_desc', label: 'По размеру (убыв.)' },
-    { value: 'size_asc', label: 'По размеру (возр.)' },
-    { value: 'date', label: 'По дате добавления' }
+    { value: 'seeders', label: '?? ????? (????.)' },
+    { value: 'size_desc', label: '?? ??????? (????.)' },
+    { value: 'size_asc', label: '?? ??????? (????.)' },
+    { value: 'date', label: '?? ???? ??????????' }
 ];
 
-/* ---------- Worker и Real-Debrid ---------- */
+/* ---------- Worker ? Real-Debrid ---------- */
 
 function getProxyUrl() {
     try {
@@ -38,7 +38,7 @@ function requireProxy() {
 
     if (!proxy) {
         throw new Error(
-            'Сначала укажи URL своего Cloudflare Worker в настройках Real-Debrid.'
+            '??????? ????? URL ?????? Cloudflare Worker ? ?????????? Real-Debrid.'
         );
     }
 
@@ -62,7 +62,7 @@ function saveAuth(auth) {
 function refreshAccessToken(auth) {
     if (!auth || !auth.refresh_token || !auth.client_id || !auth.client_secret) {
         return Promise.reject(new Error(
-            'Нет данных для обновления RD-токена. Переподключи Real-Debrid в rd-test.'
+            '??? ?????? ??? ?????????? RD-??????. ???????????? Real-Debrid ? rd-test.'
         ));
     }
     return postForm('https://api.real-debrid.com/oauth/v2/token', '', {
@@ -71,7 +71,7 @@ function refreshAccessToken(auth) {
         code: auth.refresh_token,
         grant_type: 'http://oauth.net/grant_type/device/1.0'
     }).then(function (tokens) {
-        if (!tokens || !tokens.access_token) throw new Error('RD не вернул новый access_token.');
+        if (!tokens || !tokens.access_token) throw new Error('RD ?? ?????? ????? access_token.');
         var updated = Object.assign({}, auth, {
             access_token: tokens.access_token,
             refresh_token: tokens.refresh_token || auth.refresh_token,
@@ -87,7 +87,7 @@ function refreshAccessToken(auth) {
 function getWorkingAuth() {
     var auth = readAuth();
     if (!auth || !auth.access_token) {
-        return Promise.reject(new Error('Real-Debrid не подключён. Подключи RD в настройках.'));
+        return Promise.reject(new Error('Real-Debrid ?? ?????????. ???????? RD ? ??????????.'));
     }
     return req(RD + 'user', auth.access_token).then(function (user) {
         return { auth: auth, user: user };
@@ -190,7 +190,7 @@ function postForm(url, access, values) {
     });
 }
 
-/* ---------- Общие настройки парсера с rd-test ---------- */
+/* ---------- ????? ????????? ??????? ? rd-test ---------- */
 
 var PARSERS_STORE = 'rd_bridge_parsers_v1';
 
@@ -232,7 +232,7 @@ function getParserSettingsDiagnostic() {
                 return parser && parser.url && parser.enabled !== false;
             }).map(function (parser) {
                 return {
-                    name: String(parser.name || 'Парсер').trim(),
+                    name: String(parser.name || '??????').trim(),
                     url: normalizeParserUrl(parser.url),
                     key: String(parser.key || '').trim(),
                     enabled: parser.enabled !== false
@@ -256,7 +256,7 @@ function getParserDisplayName(parser) {
         var host = new URL(parser.url).hostname.toLowerCase();
         return host.replace(/^www\./, '');
     } catch (e) {
-        return parser.name || 'выбранный парсер';
+        return parser.name || '????????? ??????';
     }
 }
 
@@ -265,14 +265,14 @@ function getParserConfig() {
 
     if (!settings.parsers.length) {
         throw new Error(
-            'Парсер не настроен. Открой настройки Real-Debrid → ' +
-            '«Выбор парсера и API» в rd-test и сохрани рабочий адрес.'
+            '?????? ?? ????????. ?????? ????????? Real-Debrid ? ' +
+            '«????? ??????? ? API» ? rd-test ? ??????? ??????? ?????.'
         );
     }
 
-    // rd-test сохраняет выбранный парсер как единственную активную запись.
-    // Если в хранилище остались несколько записей, используем только первую
-    // включённую — Card Button больше не объединяет основной и дополнительный.
+    // rd-test ????????? ????????? ?????? ??? ???????????? ???????? ??????.
+    // ???? ? ????????? ???????? ????????? ???????, ?????????? ?????? ??????
+    // ?????????? - Card Button ?????? ?? ?????????? ???????? ? ??????????????.
     var parser = settings.parsers[0];
 
     return {
@@ -295,7 +295,7 @@ function buildJackettUrl(parser, query) {
     return url + '?' + params.toString();
 }
 
-/* ---------- Информация о фильме и magnet ---------- */
+/* ---------- ?????????? ? ?????? ? magnet ---------- */
 
 function normalizeImdb(value) {
     var match = String(value || '').match(/tt\d+/i);
@@ -374,7 +374,7 @@ function magnetDiagnostic(item) {
 
     return {
         title: item.title || '',
-        dn: dn || '(параметр dn отсутствует)',
+        dn: dn || '(???????? dn ???????????)',
         hash: item.hash || '',
         magnetFound: !!magnet
     };
@@ -408,7 +408,7 @@ function parseDateValue(value) {
     return isNaN(parsed) ? 0 : parsed;
 }
 
-/* ---------- Поиск через выбранный Jackett ---------- */
+/* ---------- ????? ????? ????????? Jackett ---------- */
 
 function search(parser, query, access) {
     var url = buildJackettUrl(parser, query);
@@ -419,7 +419,7 @@ function search(parser, query, access) {
             : (data.Results || data.results || []);
 
         if (!Array.isArray(list)) {
-            throw new Error('Ответ парсера не содержит массива Results');
+            throw new Error('????? ??????? ?? ???????? ??????? Results');
         }
 
         var mapped = list.map(function (x) {
@@ -440,7 +440,7 @@ function search(parser, query, access) {
             ]);
 
             var item = {
-                title: x.Title || x.title || x.Name || x.name || 'Без названия',
+                title: x.Title || x.title || x.Name || x.name || '??? ????????',
                 hash: hashOf(x),
                 size: Number(rawSize) || 0,
                 seeders: Number(rawSeeders) || 0,
@@ -467,7 +467,7 @@ function search(parser, query, access) {
     });
 }
 
-/* ---------- Сортировка ---------- */
+/* ---------- ?????????? ---------- */
 
 function sortItems(items, mode) {
     var rows = items.slice();
@@ -505,17 +505,17 @@ function sortItems(items, mode) {
     return rows;
 }
 
-/* ---------- Проверка DMM ---------- */
+/* ---------- ???????? DMM ---------- */
 
 function checkDMM(imdbId, hashes, access, retryAuth) {
     if (!imdbId) {
         return Promise.reject(
-            new Error('IMDb ID фильма не найден в данных Lampa')
+            new Error('IMDb ID ?????? ?? ?????? ? ?????? Lampa')
         );
     }
 
     if (!hashes || !hashes.length) {
-        return Promise.reject(new Error('Нет хэшей для проверки'));
+        return Promise.reject(new Error('??? ????? ??? ????????'));
     }
 
     var proxy;
@@ -540,8 +540,8 @@ function checkDMM(imdbId, hashes, access, retryAuth) {
     }).then(function (response) {
         var httpStatus = response.status;
         var responseType = response.headers && response.headers.get
-            ? response.headers.get('content-type') || 'не указан'
-            : 'недоступен';
+            ? response.headers.get('content-type') || '?? ??????'
+            : '??????????';
 
         return parseResponse(response).then(function (data) {
             // Keep the API payload (without request headers/token) available for diagnostics.
@@ -565,7 +565,7 @@ function checkDMM(imdbId, hashes, access, retryAuth) {
         }
         // Network/CORS/proxy errors do not have an HTTP response. Never log auth headers.
         if (error && !error.rdHttpStatus) {
-            error.rdDiagnostic = 'Сетевой сбой, CORS или Worker не вернул HTTP-ответ';
+            error.rdDiagnostic = '??????? ????, CORS ??? Worker ?? ?????? HTTP-?????';
         }
         throw error;
     });
@@ -617,28 +617,28 @@ function formatSize(n) {
 
 function statusText(status) {
     var labels = {
-        magnet_conversion: 'RD обрабатывает магнит',
-        waiting_files_selection: 'Ожидается выбор файлов',
-        queued: 'Задача в очереди',
-        downloading: 'RD загружает раздачу',
-        downloaded: 'RD сообщает: загружено',
-        error: 'RD сообщил об ошибке',
-        virus: 'RD пометил раздачу как опасную',
-        compressing: 'RD обрабатывает файлы',
-        uploading: 'RD обрабатывает файлы',
-        dead: 'Раздача недоступна'
+        magnet_conversion: 'RD ???????????? ??????',
+        waiting_files_selection: '????????? ????? ??????',
+        queued: '?????? ? ???????',
+        downloading: 'RD ????????? ???????',
+        downloaded: 'RD ????????: ?????????',
+        error: 'RD ??????? ?? ??????',
+        virus: 'RD ??????? ??????? ??? ???????',
+        compressing: 'RD ???????????? ?????',
+        uploading: 'RD ???????????? ?????',
+        dead: '??????? ??????????'
     };
 
-    return labels[status] || ('Статус RD: ' + (status || 'неизвестен'));
+    return labels[status] || ('?????? RD: ' + (status || '??????????'));
 }
 
-/* ---------- Получение RD_USER_ID ---------- */
+/* ---------- ????????? RD_USER_ID ---------- */
 
 function getRDUserId(screen, button) {
     var access = token();
 
     if (!access) {
-        note('Сначала подключи Real-Debrid в настройках.');
+        note('??????? ???????? Real-Debrid ? ??????????.');
         return;
     }
 
@@ -652,7 +652,7 @@ function getRDUserId(screen, button) {
     }
 
     button.disabled = true;
-    button.textContent = 'Получаем ID…';
+    button.textContent = '???????? ID?';
 
     fetch(proxy + '?action=rd-user-id', {
         method: 'GET',
@@ -662,7 +662,7 @@ function getRDUserId(screen, button) {
         }
     }).then(parseResponse).then(function (data) {
         if (!data || data.id == null || !/^\d+$/.test(String(data.id))) {
-            throw new Error('Worker не вернул числовой ID аккаунта.');
+            throw new Error('Worker ?? ?????? ???????? ID ????????.');
         }
 
         var id = String(data.id);
@@ -677,19 +677,19 @@ function getRDUserId(screen, button) {
             'border-radius:8px;overflow-wrap:anywhere;line-height:1.5';
 
         var label = document.createElement('div');
-        label.textContent = 'Твой RD_USER_ID: ' + id;
+        label.textContent = '???? RD_USER_ID: ' + id;
         result.appendChild(label);
 
         var copy = document.createElement('button');
         copy.type = 'button';
-        copy.textContent = 'Скопировать ID';
+        copy.textContent = '??????????? ID';
         copy.style.cssText =
             'margin-top:8px;padding:8px 12px;border:0;border-radius:6px';
 
         copy.onclick = function () {
             if (navigator.clipboard && navigator.clipboard.writeText) {
                 navigator.clipboard.writeText(id).then(function () {
-                    note('RD_USER_ID скопирован.');
+                    note('RD_USER_ID ??????????.');
                 }).catch(function () {
                     note('RD_USER_ID: ' + id);
                 });
@@ -703,16 +703,16 @@ function getRDUserId(screen, button) {
         var status = screen.querySelector('#rd-status');
         if (status) status.after(result);
 
-        button.textContent = 'ID получен';
+        button.textContent = 'ID ???????';
         button.disabled = false;
     }).catch(function (err) {
         button.disabled = false;
-        button.textContent = 'Получить RD_USER_ID';
-        note('Не удалось получить ID: ' + err.message);
+        button.textContent = '???????? RD_USER_ID';
+        note('?? ??????? ???????? ID: ' + err.message);
     });
 }
 
-/* ---------- Метки состояния DMM ---------- */
+/* ---------- ????? ????????? DMM ---------- */
 
 function updateCacheLabel(screen, item) {
     var nodes = screen.querySelectorAll('[data-cache-hash]');
@@ -728,18 +728,18 @@ function updateCacheLabel(screen, item) {
     if (!node) return;
 
     if (item.cacheState === 'cached') {
-        node.textContent = 'Проверка кеша: DMM · подтверждён (' +
-            (Number(item.cacheFiles) || 0) + ' файлов)';
+        node.textContent = '???????? ????: DMM · ??????????? (' +
+            (Number(item.cacheFiles) || 0) + ' ??????)';
         node.style.color = '#72e6a2';
     } else if (item.cacheState === 'error') {
         node.textContent =
-            'Проверка кеша: DMM · ошибка проверки (кеш не подтверждён)';
+            '???????? ????: DMM · ?????? ???????? (??? ?? ???????????)';
         node.style.color = '#ff8585';
     } else if (item.cacheState === 'checking') {
-        node.textContent = 'Проверка кеша: DMM · проверяем…';
+        node.textContent = '???????? ????: DMM · ??????????';
         node.style.color = '#ffc766';
     } else {
-        node.textContent = 'Проверка кеша: DMM · нет подтверждения';
+        node.textContent = '???????? ????: DMM · ??? ?????????????';
         node.style.color = '#ffc766';
     }
 }
@@ -749,7 +749,7 @@ function runCacheCheck(items, imdbId, access, screen) {
 
     if (!imdbId) {
         status.textContent =
-            'Кеш не проверен: IMDb ID не найден в данных фильма.';
+            '??? ?? ????????: IMDb ID ?? ?????? ? ?????? ??????.';
 
         items.forEach(function (item) {
             item.cacheState = 'unknown';
@@ -762,7 +762,7 @@ function runCacheCheck(items, imdbId, access, screen) {
     }
 
     if (!items.length) {
-        status.textContent = 'Нет раздач для проверки.';
+        status.textContent = '??? ?????? ??? ????????.';
         return;
     }
 
@@ -773,7 +773,7 @@ function runCacheCheck(items, imdbId, access, screen) {
     }
 
     status.textContent =
-        'Проверяем DMM · IMDb: ' + imdbId + ' · раздач: ' + items.length;
+        '????????? DMM · IMDb: ' + imdbId + ' · ??????: ' + items.length;
 
     var cachedCount = 0;
     var unknownCount = 0;
@@ -789,7 +789,7 @@ function runCacheCheck(items, imdbId, access, screen) {
                 if (!screen.isConnected) return;
 
                 if (!data || !Array.isArray(data.available)) {
-                    var shapeError = new Error('Ответ DMM не содержит массива available');
+                    var shapeError = new Error('????? DMM ?? ???????? ??????? available');
                     shapeError.responseSummary = data && typeof data === 'object'
                         ? Object.keys(data).join(', ')
                         : String(data);
@@ -812,14 +812,14 @@ function runCacheCheck(items, imdbId, access, screen) {
         }).catch(function (err) {
             var batchHashes = batch.map(function (item) { return item.hash; });
             errors.push(
-                'Пакет (' + batch.length + ' хэшей), первые хэши: ' +
+                '????? (' + batch.length + ' ?????), ?????? ????: ' +
                 batchHashes.slice(0, 5).join(', ') +
-                (batchHashes.length > 5 ? ' …' : '') +
-                '\nОшибка: ' + (err && err.message ? err.message : String(err)) +
-                (err && err.rdHttpStatus ? '\nHTTP статус: ' + err.rdHttpStatus : '') +
+                (batchHashes.length > 5 ? ' ?' : '') +
+                '\n??????: ' + (err && err.message ? err.message : String(err)) +
+                (err && err.rdHttpStatus ? '\nHTTP ??????: ' + err.rdHttpStatus : '') +
                 (err && err.rdContentType ? '\nContent-Type: ' + err.rdContentType : '') +
-                (err && err.rdDiagnostic ? '\nДиагностика: ' + err.rdDiagnostic : '') +
-                (err && err.responseSummary ? '\nПоля ответа: ' + err.responseSummary : '')
+                (err && err.rdDiagnostic ? '\n???????????: ' + err.rdDiagnostic : '') +
+                (err && err.responseSummary ? '\n???? ??????: ' + err.responseSummary : '')
             );
 
             batch.forEach(function (item) {
@@ -832,26 +832,26 @@ function runCacheCheck(items, imdbId, access, screen) {
         if (!screen.isConnected) return;
 
         status.textContent =
-            'DMM · подтверждено: ' + cachedCount +
-            ' · без подтверждения: ' + unknownCount +
-            (errors.length ? ' · ошибок: ' + errors.length : '');
+            'DMM · ????????????: ' + cachedCount +
+            ' · ??? ?????????????: ' + unknownCount +
+            (errors.length ? ' · ??????: ' + errors.length : '');
 
         // Add DMM diagnostics to the existing top-level search diagnostics,
         // where the Lampa bottom navigation cannot cover the output.
         var diag = screen.__rdSearchDiagPre;
         if (diag) {
             var dmmReport = [
-                '\n\n===== Проверка DMM =====',
+                '\n\n===== ???????? DMM =====',
                 'IMDb ID: ' + imdbId,
-                'Проверено раздач: ' + items.length,
-                'Подтверждено: ' + cachedCount,
-                'Без подтверждения: ' + unknownCount,
-                'Ошибок: ' + errors.length
+                '????????? ??????: ' + items.length,
+                '????????????: ' + cachedCount,
+                '??? ?????????????: ' + unknownCount,
+                '??????: ' + errors.length
             ];
             if (errors.length) {
-                dmmReport.push('Ошибки проверки (ответ/HTTP/сеть):\n' + errors.join('\n\n'));
+                dmmReport.push('?????? ???????? (?????/HTTP/????):\n' + errors.join('\n\n'));
             }
-            dmmReport.push('Секретные заголовки и API-ключ не выводятся.');
+            dmmReport.push('????????? ????????? ? API-???? ?? ?????????.');
             diag.textContent += dmmReport.join('\n');
         }
 
@@ -859,13 +859,13 @@ function runCacheCheck(items, imdbId, access, screen) {
     });
 }
 
-/* ---------- Добавление magnet в RD ---------- */
+/* ---------- ?????????? magnet ? RD ---------- */
 
 function testOne(item, button, resultNode) {
     var access = token();
 
     if (!access) {
-        note('Сначала подключи Real-Debrid в настройках.');
+        note('??????? ???????? Real-Debrid ? ??????????.');
         return;
     }
 
@@ -873,8 +873,8 @@ function testOne(item, button, resultNode) {
 
     if (button.dataset.rdTaskCreated) {
         resultNode.textContent =
-            'Задача уже была создана: ' + button.dataset.rdTaskCreated +
-            '\nПроверь её состояние в Real-Debrid.';
+            '?????? ??? ???? ???????: ' + button.dataset.rdTaskCreated +
+            '\n??????? ?? ????????? ? Real-Debrid.';
         return;
     }
 
@@ -882,33 +882,33 @@ function testOne(item, button, resultNode) {
 
     if (!magnet) {
         resultNode.textContent =
-            'Не удалось получить magnet-ссылку или hash.';
+            '?? ??????? ???????? magnet-?????? ??? hash.';
         return;
     }
 
     if (!window.confirm(
-        'Добавить раздачу в Real-Debrid?\n\n' +
-        item.title + '\n\nМагнит будет отправлен в твой аккаунт RD. Продолжить?'
+        '???????? ??????? ? Real-Debrid?\n\n' +
+        item.title + '\n\n?????? ????? ????????? ? ???? ??????? RD. ???????????'
     )) return;
 
     button.dataset.rdBusy = '1';
     button.disabled = true;
-    button.textContent = 'Отправляем в RD…';
-    resultNode.textContent = 'Создаём задачу…';
+    button.textContent = '?????????? ? RD?';
+    resultNode.textContent = '??????? ???????';
 
     postForm(RD + 'torrents/addMagnet', access, {
         magnet: magnet
     }).then(function (response) {
         if (!response || !response.id) {
-            throw new Error('RD не вернул ID задачи: ' + JSON.stringify(response));
+            throw new Error('RD ?? ?????? ID ??????: ' + JSON.stringify(response));
         }
 
         var id = String(response.id);
 
         button.dataset.rdTaskCreated = id;
-        button.textContent = 'Задача создана';
+        button.textContent = '?????? ???????';
         resultNode.textContent =
-            'Задача создана: ' + id + '\nВыбираем все файлы…';
+            '?????? ???????: ' + id + '\n???????? ??? ??????';
 
         return postForm(
             RD + 'torrents/selectFiles/' + encodeURIComponent(id),
@@ -918,32 +918,32 @@ function testOne(item, button, resultNode) {
             return req(RD + 'torrents/info/' + encodeURIComponent(id), access);
         }).then(function (info) {
             resultNode.textContent =
-                statusText(info.status) + '\nID задачи RD: ' + id;
+                statusText(info.status) + '\nID ?????? RD: ' + id;
 
-            button.textContent = 'Задача создана';
+            button.textContent = '?????? ???????';
             button.disabled = true;
         }).catch(function (err) {
             resultNode.textContent =
-                'Задача RD создана: ' + id +
-                '\nОшибка выбора файлов или проверки: ' + err.message +
-                '\nПроверь задачу RD вручную, прежде чем повторять добавление.';
+                '?????? RD ???????: ' + id +
+                '\n?????? ?????? ?????? ??? ????????: ' + err.message +
+                '\n??????? ?????? RD ???????, ?????? ??? ????????? ??????????.';
 
-            button.textContent = 'Задача создана';
+            button.textContent = '?????? ???????';
             button.disabled = true;
         });
     }).catch(function (err) {
         button.dataset.rdBusy = '0';
         button.disabled = true;
-        button.textContent = 'Проверь задачу RD';
+        button.textContent = '??????? ?????? RD';
 
         resultNode.textContent =
-            'Не удалось подтвердить результат добавления: ' + err.message +
-            '\nВозможно, RD успел создать задачу.' +
-            '\nПроверь список задач Real-Debrid перед повторной отправкой.';
+            '?? ??????? ??????????? ????????? ??????????: ' + err.message +
+            '\n????????, RD ????? ??????? ??????.' +
+            '\n??????? ?????? ????? Real-Debrid ????? ????????? ?????????.';
     });
 }
 
-/* ---------- Меню сортировки ---------- */
+/* ---------- ???? ?????????? ---------- */
 
 function openSortMenu(screen) {
     var old = document.getElementById('rd-sort-menu');
@@ -965,7 +965,7 @@ function openSortMenu(screen) {
         'border-radius:18px;padding:18px 18px 24px;box-sizing:border-box';
 
     var heading = document.createElement('div');
-    heading.textContent = 'Сортировать';
+    heading.textContent = '???????????';
     heading.style.cssText = 'font-size:26px;margin:4px 4px 18px';
     panel.appendChild(heading);
 
@@ -984,7 +984,7 @@ function openSortMenu(screen) {
         row.appendChild(label);
 
         var check = document.createElement('span');
-        check.textContent = option.value === current ? '✓' : '';
+        check.textContent = option.value === current ? '?' : '';
         check.style.cssText = 'font-size:24px;min-width:24px;text-align:center';
         row.appendChild(check);
 
@@ -1008,7 +1008,7 @@ function openSortMenu(screen) {
     document.body.appendChild(menu);
 }
 
-/* ---------- Карточки результатов ---------- */
+/* ---------- ???????? ??????????? ---------- */
 
 function renderCards(screen) {
     var all = screen.__rdItems || [];
@@ -1051,11 +1051,11 @@ function renderCards(screen) {
             var bits = [];
 
             if (item.size) bits.push(formatSize(item.size));
-            bits.push('Сиды: ' + item.seeders);
+            bits.push('????: ' + item.seeders);
             if (item.tracker) bits.push(item.tracker);
 
             if (item.dateAdded) {
-                bits.push('Дата: ' + new Date(item.dateAdded).toLocaleDateString());
+                bits.push('????: ' + new Date(item.dateAdded).toLocaleDateString());
             }
 
             meta.textContent = bits.join(' · ');
@@ -1072,7 +1072,7 @@ function renderCards(screen) {
                 'border-radius:6px;font-size:13px';
 
             var diagSummary = document.createElement('summary');
-            diagSummary.textContent = 'Проверка magnet / имени dn';
+            diagSummary.textContent = '???????? magnet / ????? dn';
             diagDetails.appendChild(diagSummary);
 
             var diagPre = document.createElement('pre');
@@ -1083,10 +1083,10 @@ function renderCards(screen) {
             var diag = magnetDiagnostic(item);
 
             diagPre.textContent =
-                'Название карточки Lampa:\n' + diag.title +
-                '\n\nИмя dn в magnet:\n' + diag.dn +
+                '???????? ???????? Lampa:\n' + diag.title +
+                '\n\n??? dn ? magnet:\n' + diag.dn +
                 '\n\nHash:\n' + diag.hash +
-                '\n\nMagnet найден: ' + (diag.magnetFound ? 'да' : 'нет');
+                '\n\nMagnet ??????: ' + (diag.magnetFound ? '??' : '???');
 
             diagDetails.appendChild(diagPre);
             card.appendChild(diagDetails);
@@ -1098,7 +1098,7 @@ function renderCards(screen) {
 
             var button = document.createElement('button');
             button.type = 'button';
-            button.textContent = 'Добавить и выбрать файлы';
+            button.textContent = '???????? ? ??????? ?????';
             button.style.cssText =
                 'display:block;position:relative;z-index:1;margin-top:10px;' +
                 'padding:12px 14px;border:0;border-radius:6px;' +
@@ -1122,7 +1122,7 @@ function renderCards(screen) {
 
         if (sourceLabel) {
             sourceLabel.textContent =
-                'Источник: ' + getParserDisplayName(getParserConfig().parsers[0]);
+                '????????: ' + getParserDisplayName(getParserConfig().parsers[0]);
         }
 
         updateCacheLabel(screen, item);
@@ -1130,7 +1130,7 @@ function renderCards(screen) {
     });
 }
 
-/* ---------- Поиск и объединение результатов ---------- */
+/* ---------- ????? ? ??????????? ??????????? ---------- */
 
 function openSearch(query, movie) {
     try { requireProxy(); }
@@ -1149,7 +1149,7 @@ function openSearch(query, movie) {
     getWorkingAuth().then(function (authResult) {
         Lampa.Activity.push({
             component: 'rd_card_button_search',
-            title: 'Real-Debrid — поиск раздач',
+            title: 'Real-Debrid - ????? ??????',
             query: query,
             movie: movie,
             access: authResult.auth.access_token,
@@ -1157,7 +1157,7 @@ function openSearch(query, movie) {
             imdbId: imdbId
         });
     }).catch(function (err) {
-        note('Авторизация RD: ' + (err.message || String(err)));
+        note('??????????? RD: ' + (err.message || String(err)));
     });
 }
 
@@ -1176,32 +1176,50 @@ function RdCardButtonSearchComponent(object) {
     screen = rdScroll.render()[0];
     screen.id = 'rd-card-search';
     var scrollBody = rdScroll.body()[0];
+
+    // TorBox's working list attaches this class to the native Lampa.Scroll body.
+    // Its CSS establishes the scroll body's own layout (rather than sizing it
+    // as a full-height child inside the activity).
+    rdScroll.body().addClass('torbox-list-container');
     scrollBody.innerHTML =
         '<div style="max-width:950px;margin:auto">' +
             '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">' +
-                '<h2>Real-Debrid — поиск раздач</h2>' +
+                '<h2>Real-Debrid - ????? ??????</h2>' +
             '</div>' +
             '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0">' +
-                '<button id="rd-sort-button" style="padding:10px 14px;border:1px solid #666;border-radius:8px;background:#333;color:#fff;cursor:pointer;touch-action:manipulation">Сортировка</button>' +
-                '<span style="opacity:.8">Текущая: <span id="rd-sort-current"></span></span>' +
+                '<button id="rd-sort-button" style="padding:10px 14px;border:1px solid #666;border-radius:8px;background:#333;color:#fff;cursor:pointer;touch-action:manipulation">??????????</button>' +
+                '<span style="opacity:.8">???????: <span id="rd-sort-current"></span></span>' +
             '</div>' +
-            '<p id="rd-status">Ищем: ' + esc(query) + '</p>' +
+            '<p id="rd-status">????: ' + esc(query) + '</p>' +
             '<div style="padding:12px;background:#333;border-radius:8px;line-height:1.5;margin-bottom:14px">' +
-                'Используется тот же сохранённый парсер и API-ключ, что и в rd-test. Зелёная метка означает, что DMM вернул хэш в available с непустым files. Отсутствие подтверждения не доказывает отсутствие кеша в Real-Debrid.' +
+                '???????????? ??? ?? ??????????? ?????? ? API-????, ??? ? ? rd-test. ??????? ????? ????????, ??? DMM ?????? ??? ? available ? ???????? files. ?????????? ????????????? ?? ?????????? ?????????? ???? ? Real-Debrid.' +
             '</div>' +
             '<div id="rd-results"></div>' +
         '</div>';
 
-    // Bound the Lampa scroll viewport; let its content grow naturally.
-// Extra bottom padding moves the final cards clear of Lampa's fixed nav.
-scrollBody.style.cssText =
-  'width:100%;height:auto;min-height:0;padding:20px 20px 150px;' +
-  'box-sizing:border-box;background:#171717;color:#fff;font:16px Arial,sans-serif;' +
-  'overflow:visible;';
-screen.style.cssText =
-  'width:100%;height:100%;min-height:0;max-height:100%;overflow:hidden;';
+    // Match the layout contract used by TorBox's native Lampa.Scroll body.
+    // Avoid min-height:100% on the scroll body: it can expand beyond the
+    // viewport and let the final cards slide behind Lampa's fixed bottom bar.
+    scrollBody.style.cssText =
+        'display:block;width:100%;height:auto;min-height:0;box-sizing:border-box;' +
+        'padding:20px 20px calc(1em + 100px);' +
+        'background:#171717;color:#fff;font:16px Arial,sans-serif;';
 
-screen.querySelector('#rd-sort-button').onclick = function (event) {
+    // Keep the scroll viewport constrained; only its body should grow.
+    screen.style.cssText =
+        'display:block;width:100%;height:100%;min-height:0;max-height:100%;overflow:hidden;';
+
+    // TorBox injects this exact body class rule. Add it here too, while
+    // retaining the extra bottom clearance needed by RD's custom card list.
+    if (!document.getElementById('rd-torbox-scroll-style')) {
+        var scrollStyle = document.createElement('style');
+        scrollStyle.id = 'rd-torbox-scroll-style';
+        scrollStyle.textContent =
+            '.torbox-list-container{display:block;padding:1em;}';
+        document.head.appendChild(scrollStyle);
+    }
+
+    screen.querySelector('#rd-sort-button').onclick = function (event) {
         event.preventDefault();
         event.stopPropagation();
         openSortMenu(screen);
@@ -1211,10 +1229,10 @@ screen.querySelector('#rd-sort-button').onclick = function (event) {
     var parserErrors = [];
     var settingsDiagnostic = getParserSettingsDiagnostic();
 
-    console.log('[RD Card Button] Настройки парсера:', settingsDiagnostic);
+    console.log('[RD Card Button] ????????? ???????:', settingsDiagnostic);
 
     screen.querySelector('#rd-status').textContent =
-        'Ищем: ' + query + ' · источников: ' + config.parsers.length;
+        '????: ' + query + ' · ??????????: ' + config.parsers.length;
 
     Promise.all(config.parsers.map(function (parser) {
         return search(parser, query, access).then(function (rows) {
@@ -1250,12 +1268,12 @@ screen.querySelector('#rd-sort-button').onclick = function (event) {
                 if (!key) return;
 
                 if (!seen[key]) {
-                    item.sources = (item.sources || [item.source || 'неизвестен']).slice();
+                    item.sources = (item.sources || [item.source || '??????????']).slice();
                     seen[key] = item;
                     all.push(item);
                 } else {
                     var existing = seen[key];
-                    var incomingSources = item.sources || [item.source || 'неизвестен'];
+                    var incomingSources = item.sources || [item.source || '??????????'];
 
                     incomingSources.forEach(function (source) {
                         if (existing.sources.indexOf(source) === -1) {
@@ -1286,7 +1304,7 @@ screen.querySelector('#rd-sort-button').onclick = function (event) {
             'margin:14px 0;padding:12px;background:#292929;border-radius:8px';
 
         var summary = document.createElement('summary');
-        summary.textContent = 'Диагностика поиска';
+        summary.textContent = '??????????? ??????';
         details.appendChild(summary);
 
         var pre = document.createElement('pre');
@@ -1294,13 +1312,13 @@ screen.querySelector('#rd-sort-button').onclick = function (event) {
             'white-space:pre-wrap;overflow-wrap:anywhere;font:13px monospace';
 
         var report = [
-            'Запрос: ' + query,
-            'IMDb ID: ' + (imdbId || 'не найден в объекте фильма'),
-            'Источник настроек: rd-test (общая память плагинов)',
-            'Активный парсер: ' + config.parsers[0].name,
-            'URL парсера: ' + config.parsers[0].url,
-            'API-ключ задан: ' + (config.parsers[0].key ? 'да' : 'нет'),
-            'Источников запрошено: ' + config.parsers.length
+            '??????: ' + query,
+            'IMDb ID: ' + (imdbId || '?? ?????? ? ??????? ??????'),
+            '???????? ????????: rd-test (????? ?????? ????????)',
+            '???????? ??????: ' + config.parsers[0].name,
+            'URL ???????: ' + config.parsers[0].url,
+            'API-???? ?????: ' + (config.parsers[0].key ? '??' : '???'),
+            '?????????? ?????????: ' + config.parsers.length
         ];
 
         config.parsers.forEach(function (parser) {
@@ -1308,16 +1326,16 @@ screen.querySelector('#rd-sort-button').onclick = function (event) {
 
             report.push(
                 '\n' + parser.name + ' (' + parser.url + '):' +
-                '\n    Ответов API: ' + (info.rawCount || 0) +
-                '\n    С распознанным хешем: ' + (info.validHashCount || 0) +
-                (info.error ? '\n    Ошибка: ' + info.error : '')
+                '\n    ??????? API: ' + (info.rawCount || 0) +
+                '\n    ? ???????????? ?????: ' + (info.validHashCount || 0) +
+                (info.error ? '\n    ??????: ' + info.error : '')
             );
         });
 
-        report.push('\nВсего уникальных хешей после объединения: ' + all.length);
+        report.push('\n????? ?????????? ????? ????? ???????????: ' + all.length);
 
         if (parserErrors.length) {
-            report.push('\nОшибки источников:\n' + parserErrors.join('\n'));
+            report.push('\n?????? ??????????:\n' + parserErrors.join('\n'));
         }
 
         pre.textContent = report.join('\n');
@@ -1329,13 +1347,13 @@ screen.querySelector('#rd-sort-button').onclick = function (event) {
             var empty = document.createElement('p');
 
             empty.textContent =
-                'Раздачи не найдены. Проверь URL, API-ключ и настройки парсера. ' +
-                'Если появилась ошибка HTTP 403 Target not allowed, выбранный домен ' +
-                'не разрешён в Worker.';
+                '??????? ?? ???????. ??????? URL, API-???? ? ????????? ???????. ' +
+                '???? ????????? ?????? HTTP 403 Target not allowed, ????????? ????? ' +
+                '?? ???????? ? Worker.';
 
             box.appendChild(empty);
 
-            screen.querySelector('#rd-status').textContent = 'Раздачи не найдены.';
+            screen.querySelector('#rd-status').textContent = '??????? ?? ???????.';
             return;
         }
 
@@ -1349,7 +1367,7 @@ screen.querySelector('#rd-sort-button').onclick = function (event) {
     }).catch(function (err) {
         if (screen.isConnected) {
             screen.querySelector('#rd-status').textContent =
-                'Ошибка поиска: ' + err.message;
+                '?????? ??????: ' + err.message;
         }
     });
     return screen;
@@ -1365,7 +1383,7 @@ screen.querySelector('#rd-sort-button').onclick = function (event) {
 }
 
 
-/* ---------- Кнопка в карточке фильма Lampa ---------- */
+/* ---------- ?????? ? ???????? ?????? Lampa ---------- */
 
 function addButton(e) {
     if (!e || e.type !== 'complite' || !e.data || !e.data.movie) return;
