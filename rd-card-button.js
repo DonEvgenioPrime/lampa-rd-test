@@ -1188,15 +1188,16 @@ function RdCardButtonSearchComponent(object) {
       '<div id="rd-results"></div>' +
     '</div>';
 
-  // Activity owns screen placement, navigation and Back handling.
+  // Keep this Activity's content scrollable. Without an explicit bounded
+  // height and overflow-y:auto, long result lists cannot be scrolled.
+  // Lampa's top/bottom panels should overlay this scroll viewport via their
+  // own stacking order; do not add fades over result cards.
   screen.style.cssText =
-    'position:relative;width:100%;height:auto;min-height:0;overflow:visible;' +
+    'position:relative;width:100%;height:100%;min-height:0;' +
+    'overflow-y:auto;overflow-x:hidden;touch-action:pan-y;' +
     'background:#171717;color:#fff;padding:20px 20px 32px;box-sizing:border-box;' +
-    'font:16px Arial,sans-serif';
-
-  // Important: do not create a nested scroll container here.
-  // Lampa's Activity owns scrolling and keeps its navigation panels above
-  // the activity content. This component should grow naturally with results.
+    'font:16px Arial,sans-serif;' +
+    '-webkit-overflow-scrolling:touch;overscroll-behavior:contain';
 
   screen.querySelector('#rd-sort-button').onclick = function (event) {
     event.preventDefault();
