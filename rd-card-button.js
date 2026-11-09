@@ -1195,7 +1195,7 @@ function RdCardButtonSearchComponent(object) {
   screen.style.cssText =
     'position:relative;width:100%;height:100%;min-height:0;' +
     'overflow-y:auto;overflow-x:hidden;touch-action:pan-y;' +
-    'clip-path:inset(0 0 104px 0);' +
+    'clip-path:inset(0 0 208px 0);' +
     'background:#171717;color:#fff;padding:20px 20px 32px;box-sizing:border-box;' +
     'font:16px Arial,sans-serif;' +
     '-webkit-overflow-scrolling:touch;overscroll-behavior:contain';
